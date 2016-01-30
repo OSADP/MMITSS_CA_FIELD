@@ -1,0 +1,26 @@
+Application Name: 
+MMITSS_California Filed
+
+Version Number: 
+v1.0
+
+Installation Instructions:
+There is no installer included with this package. Only Source code is provided.
+
+Description:
+This package includes source code of the MMITSS California implementation. In the MMITSS CA implementation,
+the MRP (MMITSS Roadside Processor) is a Linux-based industrial PC, which host the core MMITSS applications,
+including Intelligent Signal Control (I-SIG), Signal Priority (SP) and real-time performace observer (PERF-OBS), 
+and interface with the Caltrans 2070 contrller. The RSE bridges the over-the-air DSRC messages and the MMITSS 
+internal messages. The OBE processes SPaT, MAP and SSM messages and broadcasts BSM and SRM messages for the services 
+of MMITSS I-SIG and SP.
+
+The PED-SIG (part of I-SIG) utilizes Savari SmartCross application, from which a pedestrian can send a request for 
+ped phase service. Please contact Savari for the SmartCross application. 
+
+The source code are in the following folders (each folder includes a README):
+   mrp: source code and configuration files for applications running on MRP. 
+   RSE_OBE: source code and configuration files for applications running on Savari STREETWAVE (RSE ver 3.1) 
+            or MobiWAVE (OBE ver 3.1). Savari STREETWAVE or MobiWAVE toolchain is required to compile the source code.
+            Please contact Savari for STREETWAVE or MobiWAVE SDK.             
+

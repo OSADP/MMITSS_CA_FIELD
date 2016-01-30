@@ -1,0 +1,3 @@
+This directory includes C++ source code for the MRP_TrafficControllerInterface 
+to communicate with a Caltrans 2070 controller running Caltrans TSCP. 
+The commnunication protocol between this component and the controller is AB3418 over serial 232.
