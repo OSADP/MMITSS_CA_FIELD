@@ -5,22 +5,56 @@ Version Number:
 v1.0
 
 Installation Instructions:
-There is no installer included with this package. Only Source code is provided.
+There is no installer included with this package. Only Source code is provided
 
 Description:
-This package includes source code of the MMITSS California implementation. In the MMITSS CA implementation,
-the MRP (MMITSS Roadside Processor) is a Linux-based industrial PC, which host the core MMITSS applications,
-including Intelligent Signal Control (I-SIG), Signal Priority (SP) and real-time performace observer (PERF-OBS), 
-and interface with the Caltrans 2070 contrller. The RSE bridges the over-the-air DSRC messages and the MMITSS 
-internal messages. The OBE processes SPaT, MAP and SSM messages and broadcasts BSM and SRM messages for the services 
-of MMITSS I-SIG and SP.
+This package includes source code of the MMITSS California implementation. 
 
-The PED-SIG (part of I-SIG) utilizes Savari SmartCross application, from which a pedestrian can send a request for 
-ped phase service. Please contact Savari for the SmartCross application. 
+In MMITSS California implementation, the MRP (MMITSS Roadside Processor), which hosts the core MMITSS applications 
+and software to interface with RSE and traffic controller, is a Linux-based industrial PC. The MRP is installed inside
+the traffic cabinet. The package works with Model 2070 controller running Caltrans TSCP (Traffic Signal Control Program). 
+The MRP connects with the 2070 controller through two RS-232 serial ports and communicates with the traffic controller 
+through AB3418 messaging. The MRP communicates with RSE using Ethernet.
 
-The source code are in the following folders (each folder includes a README):
-   mrp: source code and configuration files for applications running on MRP. 
-   RSE_OBE: source code and configuration files for applications running on Savari STREETWAVE (RSE ver 3.1) 
-            or MobiWAVE (OBE ver 3.1). Savari STREETWAVE or MobiWAVE toolchain is required to compile the source code.
-            Please contact Savari for STREETWAVE or MobiWAVE SDK.             
+There are four major component of MMITSS California field version: Intelligent Signal Control (I-SIG), Signal Priority (SP), 
+Mobile Accessible Pedestrian Signal System (PED-SIG) and real-time performance observer (PERF-OBS).
 
+Intelligent Signal Control (I-SIG)
+I-SIG provides cv-based signal actuation and dilemma zone protection. I-SIG takes vehicle trajectory data from BSMs,
+places a service call on the controller for the phase that controls the vehicle's movement, and when needed, extends the green phase 
+for dilemma zone protecion. The phase call and extension control comands are comminucated with the traffic controller through 
+AB3418 over RS-232 communications.
+
+Signal Priority (SP)
+Signal priority provides priority to different modes of vehicles including transit vehicles and trucks. Priority eligible vehicles 
+receive SPAT, MAP and SSM from RSE when they enter the DSRC range and generate SRMs. MRP considers all the active requests from 
+different vehicle, decides the approriate priority treatment, and places priority calls to the traffic controller through AB3418 
+over RS-232 communications.
+
+Mobile Accessible Pedestrian Signal System (PED-SIG)
+PED-SIG works together with Savari SmartCross application. Through the SmartCross mobile app, a user can visualize the remaining time 
+on the active pedestrian phase, send a pedestrian request, and get audio assistance on the walkcross. This package includes applications 
+that send SPAT and MAP to the SmartCross app, receive pedestrian request, and place a pedetrain service call on the traffic controller. 
+Please contact Savari (http://www.savarinetworks.com/) for the Smartcross Mobile app.
+  
+Real-time Performance Observer (PERF-OBS)
+PERF-OBS monitors all the users on the road through BSMs and collects real-time performance data by movement by mode such as 
+travel time, delay, etc. 
+
+Operating system and compiler: 
+This package includes two groups of source code, one in the 'mrp' subdirectory and the other in the 'RSE_OBE' subdirectory.
+The 'mrp' subdirectory contains the source code for applications to run on the MRP. A README and makefile are included for each group of
+source code within this subdirectory. The MRP programs should be run on Linux. The version of Linux that is used in California field is as follows:
+    DISTRIB_ID=Ubuntu
+    DISTRIB_RELEASE=12.04
+    DISTRIB_CODENAME=precise
+    DISTRIB_DESCRIPTION="Ubuntu 12.04.2 LTS" 
+    
+The 'RSE_OBE' subdirectory contains the source code for applications to run on OBE and RSE. A README and makefile are included each group of 
+source code within this subdirectory. The OBE/RSE programs should be run on Savari STREETWAVE (RSE) device or MobiWAVE (OBE/ASD) device.
+Savari StreetWAVE and MobiWAVE toolchain is required to compile the source code. Please contact Savari (http://www.savarinetworks.com/) for 
+STREETWAVE or MobiWAVE SDK. The version of OBE and RSE used in the California field is version 3.1.2.1 firmware. 
+
+Website:
+Detailed System Design Documentation is available throught the Connected Vehicle Pooled Fund Study website: 
+   http://www.cts.virginia.edu/cvpfs_research/
