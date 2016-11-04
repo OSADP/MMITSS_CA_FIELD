@@ -1,3 +1,9 @@
+//********************************************************************************************************
+//
+// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+//       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
+//
+//*********************************************************************************************************
 /*-
  * Copyright (c) 2004, 2007 Lev Walkin <vlm@lionet.info>. All rights reserved.
  * Redistribution and modifications are permitted subject to BSD license.

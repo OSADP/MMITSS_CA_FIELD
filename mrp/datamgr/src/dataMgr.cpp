@@ -1,3 +1,9 @@
+//********************************************************************************************************
+//
+// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+//       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
+//
+//*********************************************************************************************************
 /* dataMgr.cpp - MRP_DataMgr
  * functions:
  * 1. send MAP to RSE_MessageTX and the cloud server

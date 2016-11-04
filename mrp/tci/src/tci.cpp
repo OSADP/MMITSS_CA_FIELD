@@ -1,3 +1,9 @@
+//********************************************************************************************************
+//
+// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+//       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
+//
+//*********************************************************************************************************
 /* tci.cpp - MRP_TrafficControllerInterface
  * functions:
  * 1. poll controller configuration data (poll_list ==> timing_card_t) and save it to file sharing with MRP_DataMgr and MRP_Aware
