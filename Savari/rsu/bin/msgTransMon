@@ -1,0 +1,12 @@
+#!/bin/sh /etc/rc.common
+START=99
+start() {
+  /usr/bin/killall -TERM msgTransMon.sh
+  /usr/bin/killall -TERM msgTransceiver
+  /home/MMITSS-CA/bin/msgTransMon.sh &
+}
+
+stop() {
+  /usr/bin/killall -TERM msgTransMon.sh
+  /usr/bin/killall -TERM msgTransceiver
+}

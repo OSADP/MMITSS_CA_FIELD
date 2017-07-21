@@ -1,0 +1,12 @@
+#!/bin/sh /etc/rc.common
+START=99
+start() {
+  /usr/bin/killall -TERM awareMon.sh
+  /usr/bin/killall -TERM obuAware
+  /home/MMITSS-CA/bin/awareMon.sh &
+}
+
+stop() {
+  /usr/bin/killall -TERM awareMon.sh
+  /usr/bin/killall -TERM obuAware
+}
