@@ -1,7 +1,0 @@
-This directory includes C++ source code for library functions of Linux socket 
-and socket configuration of each component.
-
-To build the code in this directory (check makefile in the 'src' subdirectory):  
-1) cd src
-2) make all          # will create an 'obj' subdirectory to save *.o and libmmitsscomm.a
-3) make install      # will create a 'release' subdirectory and copy libmmitsscomm.a over 

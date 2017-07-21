@@ -1,8 +1,0 @@
-This directory includes C++ source code for library functions of J2735 message encoding/decoding
-and locating vehicles (BSMs) on the MAP. The J2735 message encoding and decoding are based on 
-SAE J2375_200911 (C source code in the 'asn1' subdirectory)
-
-To build the code in this directory (check makefile in the 'src' subdirectory):  
-1) cd src
-2) make all          # will create an 'obj' subdirectory to save *.o and libdsrc.a
-3) make install      # will create a 'release' subdirectory and copy libdsrc.a over 

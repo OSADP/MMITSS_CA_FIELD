@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -8,8 +8,8 @@
  * Copyright (c) 2004, 2006 Lev Walkin <vlm@lionet.info>. All rights reserved.
  * Redistribution and modifications are permitted subject to BSD license.
  */
-#ifndef	_ASN1_CONSTRAINTS_VALIDATOR_H_
-#define	_ASN1_CONSTRAINTS_VALIDATOR_H_
+#ifndef	ASN1_CONSTRAINTS_VALIDATOR_H
+#define	ASN1_CONSTRAINTS_VALIDATOR_H
 
 #include <asn_system.h>		/* Platform-dependent types */
 
@@ -60,10 +60,10 @@ asn_constr_check_f asn_generic_unknown_constraint; /* Not fully supported */
 /*
  * Invoke the callback with a complete error message.
  */
-#define	_ASN_CTFAIL	if(ctfailcb) ctfailcb
+#define	ASN__CTFAIL	if(ctfailcb) ctfailcb
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif	/* _ASN1_CONSTRAINTS_VALIDATOR_H_ */
+#endif	/* ASN1_CONSTRAINTS_VALIDATOR_H */

@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************

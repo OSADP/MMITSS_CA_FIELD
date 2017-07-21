@@ -1,8 +1,0 @@
-This directory includes the configuration files for components running in the MRP.
- 
-List of files in this directory:
-CAtestbed.nmap - includes MAP descriptions for each of MMITSS intersections in the CA testbed.
-awrSocket.conf - configuration file for MRP_Aware
-mgrSocket.conf - configuration file for MRP_DataMgr
-obsSocket.conf - configuration file for MRP_PerformanceObserver
-tciSocket.conf - configuration file for MRP_TrafficControllerInterface

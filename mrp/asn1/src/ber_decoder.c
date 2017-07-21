@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -50,7 +50,7 @@ ber_decode(asn_codec_ctx_t *opt_codec_ctx,
 	} else {
 		/* If context is not given, be security-conscious anyway */
 		memset(&s_codec_ctx, 0, sizeof(s_codec_ctx));
-		s_codec_ctx.max_stack_size = _ASN_DEFAULT_STACK_MAX;
+		s_codec_ctx.max_stack_size = ASN__DEFAULT_STACK_MAX;
 		opt_codec_ctx = &s_codec_ctx;
 	}
 
@@ -86,7 +86,7 @@ ber_check_tags(asn_codec_ctx_t *opt_codec_ctx,
 	/*
 	 * Make sure we didn't exceed the maximum stack size.
 	 */
-	if(_ASN_STACK_OVERFLOW_CHECK(opt_codec_ctx))
+	if(ASN__STACK_OVERFLOW_CHECK(opt_codec_ctx))
 		RETURN(RC_FAIL);
 
 	/*
@@ -212,7 +212,7 @@ ber_check_tags(asn_codec_ctx_t *opt_codec_ctx,
 		 */
 		len_len = ber_fetch_length(tlv_constr,
 			(const char *)ptr + tag_len, size - tag_len, &tlv_len);
-		ASN_DEBUG("Fetchinig len = %ld", (long)len_len);
+		ASN_DEBUG("Fetching len = %ld", (long)len_len);
 		switch(len_len) {
 		case -1: RETURN(RC_FAIL);
 		case 0: RETURN(RC_WMORE);

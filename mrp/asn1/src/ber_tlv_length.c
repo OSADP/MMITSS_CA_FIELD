@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -91,7 +91,7 @@ ber_skip_length(asn_codec_ctx_t *opt_codec_ctx,
 	/*
 	 * Make sure we didn't exceed the maximum stack size.
 	 */
-	if(_ASN_STACK_OVERFLOW_CHECK(opt_codec_ctx))
+	if(ASN__STACK_OVERFLOW_CHECK(opt_codec_ctx))
 		return -1;
 
 	/*

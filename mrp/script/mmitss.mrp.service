@@ -1,0 +1,13 @@
+[Unit]
+Description=MMITSS-CA MRP Service
+After=network.target
+
+[Service]
+ExecStart=/home/MMITSS-CA/mrp/bin/start-mrp.sh &
+ExecStop=/home/MMITSS-CA/mrp/bin/stop-mrp.sh
+Restart=on-abnormal
+User=kzhou
+Group=software
+
+[Install]
+WantedBy=multi-user.target

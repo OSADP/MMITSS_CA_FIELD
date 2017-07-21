@@ -1,7 +1,0 @@
-This directory includes Linux bash scripts to run MRP components.
-
-List of files in this directory:
-monAwr.sh - script to run MRP_Aware
-monMgr.sh - script to run MRP_DataMgr
-monTci.sh - script to run MRP_TrafficControllerInterface
-

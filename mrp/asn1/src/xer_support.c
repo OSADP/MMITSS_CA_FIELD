@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -28,16 +28,7 @@ typedef enum {
 	ST_COMMENT_CLO_RT	/* "-->"[1] */
 } pstate_e;
 
-static pxml_chunk_type_e final_chunk_type[] = {
-	PXML_TEXT,
-	PXML_TAG_END,
-	PXML_COMMENT_END,
-	PXML_TAG_END,
-	PXML_COMMENT_END,
-};
-
-
-static int
+static const int
 _charclass[256] = {
 	0,0,0,0,0,0,0,0, 0,1,1,0,1,1,0,0,
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,
@@ -85,8 +76,11 @@ _charclass[256] = {
 #define TOKEN_CB(_type, _ns, _current_too)			\
 	TOKEN_CB_CALL(_type, _ns, _current_too, 0)
 
+#define PXML_TAG_FINAL_CHUNK_TYPE      PXML_TAG_END
+#define PXML_COMMENT_FINAL_CHUNK_TYPE  PXML_COMMENT_END
+
 #define TOKEN_CB_FINAL(_type, _ns, _current_too)		\
-	TOKEN_CB_CALL(final_chunk_type[_type], _ns, _current_too, 1)
+	TOKEN_CB_CALL( _type ## _FINAL_CHUNK_TYPE , _ns, _current_too, 1)
 
 /*
  * Parser itself

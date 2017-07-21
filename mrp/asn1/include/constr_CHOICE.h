@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-typedef struct asn_CHOICE_specifics_s {
+typedef const struct asn_CHOICE_specifics_s {
 	/*
 	 * Target structure description.
 	 */
@@ -30,7 +30,7 @@ typedef struct asn_CHOICE_specifics_s {
 	/*
 	 * Tags to members mapping table.
 	 */
-	asn_TYPE_tag2member_t *tag2el;
+	const asn_TYPE_tag2member_t *tag2el;
 	int tag2el_count;
 
 	/* Canonical ordering of CHOICE elements, for PER */
@@ -54,6 +54,8 @@ xer_type_decoder_f CHOICE_decode_xer;
 xer_type_encoder_f CHOICE_encode_xer;
 per_type_decoder_f CHOICE_decode_uper;
 per_type_encoder_f CHOICE_encode_uper;
+per_type_decoder_f CHOICE_decode_aper;
+per_type_encoder_f CHOICE_encode_aper;
 asn_outmost_tag_f CHOICE_outmost_tag;
 
 #ifdef __cplusplus

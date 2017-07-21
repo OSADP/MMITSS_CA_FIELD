@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -15,7 +15,7 @@
 /*
  * BIT STRING basic type description.
  */
-static ber_tlv_tag_t asn_DEF_BIT_STRING_tags[] = {
+static const ber_tlv_tag_t asn_DEF_BIT_STRING_tags[] = {
 	(ASN_TAG_CLASS_UNIVERSAL | (3 << 2))
 };
 static asn_OCTET_STRING_specifics_t asn_DEF_BIT_STRING_specs = {
@@ -35,6 +35,8 @@ asn_TYPE_descriptor_t asn_DEF_BIT_STRING = {
 	BIT_STRING_encode_xer,
 	OCTET_STRING_decode_uper,	/* Unaligned PER decoder */
 	OCTET_STRING_encode_uper,	/* Unaligned PER encoder */
+	OCTET_STRING_decode_aper,	/* Aligned PER decoder */
+	OCTET_STRING_encode_aper,	/* Aligned PER encoder */
 	0, /* Use generic outmost tag fetcher */
 	asn_DEF_BIT_STRING_tags,
 	sizeof(asn_DEF_BIT_STRING_tags)
@@ -58,13 +60,13 @@ BIT_STRING_constraint(asn_TYPE_descriptor_t *td, const void *sptr,
 	if(st && st->buf) {
 		if((st->size == 0 && st->bits_unused)
 		|| st->bits_unused < 0 || st->bits_unused > 7) {
-			_ASN_CTFAIL(app_key, td, sptr,
+			ASN__CTFAIL(app_key, td, sptr,
 				"%s: invalid padding byte (%s:%d)",
 				td->name, __FILE__, __LINE__);
 			return -1;
 		}
 	} else {
-		_ASN_CTFAIL(app_key, td, sptr,
+		ASN__CTFAIL(app_key, td, sptr,
 			"%s: value not given (%s:%d)",
 			td->name, __FILE__, __LINE__);
 		return -1;
@@ -73,7 +75,7 @@ BIT_STRING_constraint(asn_TYPE_descriptor_t *td, const void *sptr,
 	return 0;
 }
 
-static char *_bit_pattern[16] = {
+static const char *_bit_pattern[16] = {
 	"0000", "0001", "0010", "0011", "0100", "0101", "0110", "0111",
 	"1000", "1001", "1010", "1011", "1100", "1101", "1110", "1111"
 };
@@ -92,7 +94,7 @@ BIT_STRING_encode_xer(asn_TYPE_descriptor_t *td, void *sptr,
 	uint8_t *end;
 
 	if(!st || !st->buf)
-		_ASN_ENCODE_FAILED;
+		ASN__ENCODE_FAILED;
 
 	er.encoded = 0;
 
@@ -107,9 +109,9 @@ BIT_STRING_encode_xer(asn_TYPE_descriptor_t *td, void *sptr,
 		int nline = xcan?0:(((buf - st->buf) % 8) == 0);
 		if(p >= scend || nline) {
 			er.encoded += p - scratch;
-			_ASN_CALLBACK(scratch, p - scratch);
+			ASN__CALLBACK(scratch, p - scratch);
 			p = scratch;
-			if(nline) _i_ASN_TEXT_INDENT(1, ilevel);
+			if(nline) ASN__TEXT_INDENT(1, ilevel);
 		}
 		memcpy(p + 0, _bit_pattern[v >> 4], 4);
 		memcpy(p + 4, _bit_pattern[v & 0x0f], 4);
@@ -117,9 +119,9 @@ BIT_STRING_encode_xer(asn_TYPE_descriptor_t *td, void *sptr,
 	}
 
 	if(!xcan && ((buf - st->buf) % 8) == 0)
-		_i_ASN_TEXT_INDENT(1, ilevel);
+		ASN__TEXT_INDENT(1, ilevel);
 	er.encoded += p - scratch;
-	_ASN_CALLBACK(scratch, p - scratch);
+	ASN__CALLBACK(scratch, p - scratch);
 	p = scratch;
 
 	if(buf == end) {
@@ -129,14 +131,14 @@ BIT_STRING_encode_xer(asn_TYPE_descriptor_t *td, void *sptr,
 		for(i = 7; i >= ubits; i--)
 			*p++ = (v & (1 << i)) ? 0x31 : 0x30;
 		er.encoded += p - scratch;
-		_ASN_CALLBACK(scratch, p - scratch);
+		ASN__CALLBACK(scratch, p - scratch);
 	}
 
-	if(!xcan) _i_ASN_TEXT_INDENT(1, ilevel - 1);
+	if(!xcan) ASN__TEXT_INDENT(1, ilevel - 1);
 
-	_ASN_ENCODED_OK(er);
+	ASN__ENCODED_OK(er);
 cb_failed:
-	_ASN_ENCODE_FAILED;
+	ASN__ENCODE_FAILED;
 }
 
 
@@ -146,7 +148,7 @@ cb_failed:
 int
 BIT_STRING_print(asn_TYPE_descriptor_t *td, const void *sptr, int ilevel,
 		asn_app_consume_bytes_f *cb, void *app_key) {
-	static const char *h2c = "0123456789ABCDEF";
+	const char * const h2c = "0123456789ABCDEF";
 	char scratch[64];
 	const BIT_STRING_t *st = (const BIT_STRING_t *)sptr;
 	uint8_t *buf;

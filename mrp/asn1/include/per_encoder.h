@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -44,6 +44,12 @@ asn_enc_rval_t uper_encode_to_buffer(
 	size_t buffer_size	/* Initial buffer size (max) */
 );
 
+asn_enc_rval_t aper_encode_to_buffer(
+	struct asn_TYPE_descriptor_s *type_descriptor,
+	void *struct_ptr,	   /* Structure to be encoded */
+	void *buffer,		   /* Pre-allocated buffer */
+	size_t buffer_size	   /* Initial buffer size (max) */
+);
 /*
  * A variant of uper_encode_to_buffer() which allocates buffer itself.
  * Returns the number of bytes in the buffer or -1 in case of failure.
@@ -58,6 +64,11 @@ ssize_t uper_encode_to_new_buffer(
 	void **buffer_r		/* Buffer allocated and returned */
 );
 
+ssize_t
+aper_encode_to_new_buffer(struct asn_TYPE_descriptor_s *td,
+						  asn_per_constraints_t *constraints,
+						  void *sptr,
+						  void **buffer_r);
 /*
  * Type of the generic PER encoder function.
  */

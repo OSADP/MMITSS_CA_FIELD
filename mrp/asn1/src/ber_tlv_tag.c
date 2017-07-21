@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -80,7 +80,7 @@ ber_tlv_tag_fwrite(ber_tlv_tag_t tag, FILE *f) {
 
 ssize_t
 ber_tlv_tag_snprint(ber_tlv_tag_t tag, char *buf, size_t size) {
-	char *type = 0;
+	const char *type = 0;
 	int ret;
 
 	switch(tag & 0x3) {

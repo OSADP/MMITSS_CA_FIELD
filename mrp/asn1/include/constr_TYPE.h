@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -79,7 +79,7 @@ typedef int (asn_struct_print_f)(
  * Do not use it in your application.
  */
 typedef ber_tlv_tag_t (asn_outmost_tag_f)(
-		struct asn_TYPE_descriptor_s *type_descriptor,
+		const struct asn_TYPE_descriptor_s *type_descriptor,
 		const void *struct_ptr, int tag_mode, ber_tlv_tag_t tag);
 /* The instance of the above function type; used internally. */
 asn_outmost_tag_f asn_TYPE_outmost_tag;
@@ -89,8 +89,8 @@ asn_outmost_tag_f asn_TYPE_outmost_tag;
  * The definitive description of the destination language's structure.
  */
 typedef struct asn_TYPE_descriptor_s {
-	char *name;	/* A name of the ASN.1 type. "" in some cases. */
-	char *xml_tag;	/* Name used in XML tag */
+	const char *name;	/* A name of the ASN.1 type. "" in some cases. */
+	const char *xml_tag;	/* Name used in XML tag */
 
 	/*
 	 * Generalized functions for dealing with the specific type.
@@ -105,6 +105,8 @@ typedef struct asn_TYPE_descriptor_s {
 	xer_type_encoder_f *xer_encoder;	/* [Canonical] XER encoder */
 	per_type_decoder_f *uper_decoder;	/* Unaligned PER decoder */
 	per_type_encoder_f *uper_encoder;	/* Unaligned PER encoder */
+	per_type_decoder_f *aper_decoder;	/* Aligned PER decoder */
+	per_type_encoder_f *aper_encoder;	/* Aligned PER encoder */
 
 	/***********************************************************************
 	 * Internally useful members. Not to be used by applications directly. *
@@ -114,10 +116,10 @@ typedef struct asn_TYPE_descriptor_s {
 	 * Tags that are expected to occur.
 	 */
 	asn_outmost_tag_f  *outmost_tag;	/* <optional, internal> */
-	ber_tlv_tag_t *tags;	/* Effective tags sequence for this type */
-	int tags_count;		/* Number of tags which are expected */
-	ber_tlv_tag_t *all_tags;/* Every tag for BER/containment */
-	int all_tags_count;	/* Number of tags */
+	const ber_tlv_tag_t *tags;	/* Effective tags sequence for this type */
+	int tags_count;			/* Number of tags which are expected */
+	const ber_tlv_tag_t *all_tags;	/* Every tag for BER/containment */
+	int all_tags_count;		/* Number of tags */
 
 	asn_per_constraints_t *per_constraints;	/* PER compiled constraints */
 
@@ -131,7 +133,7 @@ typedef struct asn_TYPE_descriptor_s {
 	 * Additional information describing the type, used by appropriate
 	 * functions above.
 	 */
-	void *specifics;
+	const void *specifics;
 } asn_TYPE_descriptor_t;
 
 /*
@@ -153,7 +155,7 @@ typedef struct asn_TYPE_member_s {
 	asn_constr_check_f *memb_constraints;	/* Constraints validator */
 	asn_per_constraints_t *per_constraints;	/* PER compiled constraints */
 	int (*default_value)(int setval, void **sptr);	/* DEFAULT <value> */
-	char *name;			/* ASN.1 identifier of the element */
+	const char *name;			/* ASN.1 identifier of the element */
 } asn_TYPE_member_t;
 
 /*

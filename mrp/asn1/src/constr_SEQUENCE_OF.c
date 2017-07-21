@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -58,7 +58,7 @@ SEQUENCE_OF_encode_der(asn_TYPE_descriptor_t *td, void *ptr,
 	computed_size += encoding_size;
 	if(!cb) {
 		erval.encoded = computed_size;
-		_ASN_ENCODED_OK(erval);
+		ASN__ENCODED_OK(erval);
 	}
 
 	ASN_DEBUG("Encoding members of SEQUENCE OF %s", td->name);
@@ -107,7 +107,7 @@ SEQUENCE_OF_encode_xer(asn_TYPE_descriptor_t *td, void *sptr,
 	int xcan = (flags & XER_F_CANONICAL);
 	int i;
 
-	if(!sptr) _ASN_ENCODE_FAILED;
+	if(!sptr) ASN__ENCODE_FAILED;
 
 	er.encoded = 0;
 
@@ -117,8 +117,8 @@ SEQUENCE_OF_encode_xer(asn_TYPE_descriptor_t *td, void *sptr,
 		if(!memb_ptr) continue;
 
 		if(mname) {
-			if(!xcan) _i_ASN_TEXT_INDENT(1, ilevel);
-			_ASN_CALLBACK3("<", 1, mname, mlen, ">", 1);
+			if(!xcan) ASN__TEXT_INDENT(1, ilevel);
+			ASN__CALLBACK3("<", 1, mname, mlen, ">", 1);
 		}
 
 		tmper = elm->type->xer_encoder(elm->type, memb_ptr,
@@ -127,23 +127,23 @@ SEQUENCE_OF_encode_xer(asn_TYPE_descriptor_t *td, void *sptr,
                 if(tmper.encoded == 0 && specs->as_XMLValueList) {
                         const char *name = elm->type->xml_tag;
 			size_t len = strlen(name);
-			if(!xcan) _i_ASN_TEXT_INDENT(1, ilevel + 1);
-			_ASN_CALLBACK3("<", 1, name, len, "/>", 2);
+			if(!xcan) ASN__TEXT_INDENT(1, ilevel + 1);
+			ASN__CALLBACK3("<", 1, name, len, "/>", 2);
                 }
 
 		if(mname) {
-			_ASN_CALLBACK3("</", 2, mname, mlen, ">", 1);
+			ASN__CALLBACK3("</", 2, mname, mlen, ">", 1);
 			er.encoded += 5;
 		}
 
 		er.encoded += (2 * mlen) + tmper.encoded;
 	}
 
-	if(!xcan) _i_ASN_TEXT_INDENT(1, ilevel - 1);
+	if(!xcan) ASN__TEXT_INDENT(1, ilevel - 1);
 
-	_ASN_ENCODED_OK(er);
+	ASN__ENCODED_OK(er);
 cb_failed:
-	_ASN_ENCODE_FAILED;
+	ASN__ENCODE_FAILED;
 }
 
 asn_enc_rval_t
@@ -155,7 +155,7 @@ SEQUENCE_OF_encode_uper(asn_TYPE_descriptor_t *td,
 	asn_TYPE_member_t *elm = td->elements;
 	int seq;
 
-	if(!sptr) _ASN_ENCODE_FAILED;
+	if(!sptr) ASN__ENCODE_FAILED;
 	list = _A_SEQUENCE_FROM_VOID(sptr);
 
 	er.encoded = 0;
@@ -170,23 +170,23 @@ SEQUENCE_OF_encode_uper(asn_TYPE_descriptor_t *td,
 	if(ct) {
 		int not_in_root = (list->count < ct->lower_bound
 				|| list->count > ct->upper_bound);
-		ASN_DEBUG("lb %ld ub %ld %s",
+		ASN_DEBUG("lb %lld ub %lld %s",
 			ct->lower_bound, ct->upper_bound,
 			ct->flags & APC_EXTENSIBLE ? "ext" : "fix");
 		if(ct->flags & APC_EXTENSIBLE) {
 			/* Declare whether size is in extension root */
 			if(per_put_few_bits(po, not_in_root, 1))
-				_ASN_ENCODE_FAILED;
+				ASN__ENCODE_FAILED;
 			if(not_in_root) ct = 0;
 		} else if(not_in_root && ct->effective_bits >= 0)
-			_ASN_ENCODE_FAILED;
+			ASN__ENCODE_FAILED;
 	}
 
 	if(ct && ct->effective_bits >= 0) {
 		/* X.691, #19.5: No length determinant */
 		if(per_put_few_bits(po, list->count - ct->lower_bound,
 				ct->effective_bits))
-			_ASN_ENCODE_FAILED;
+			ASN__ENCODE_FAILED;
 	}
 
 	for(seq = -1; seq < list->count;) {
@@ -196,19 +196,86 @@ SEQUENCE_OF_encode_uper(asn_TYPE_descriptor_t *td,
 			mayEncode = list->count;
 		} else {
 			mayEncode = uper_put_length(po, list->count - seq);
-			if(mayEncode < 0) _ASN_ENCODE_FAILED;
+			if(mayEncode < 0) ASN__ENCODE_FAILED;
 		}
 
 		while(mayEncode--) {
 			void *memb_ptr = list->array[seq++];
-			if(!memb_ptr) _ASN_ENCODE_FAILED;
+			if(!memb_ptr) ASN__ENCODE_FAILED;
 			er = elm->type->uper_encoder(elm->type,
 				elm->per_constraints, memb_ptr, po);
 			if(er.encoded == -1)
-				_ASN_ENCODE_FAILED;
+				ASN__ENCODE_FAILED;
 		}
 	}
 
-	_ASN_ENCODED_OK(er);
+	ASN__ENCODED_OK(er);
 }
 
+asn_enc_rval_t
+SEQUENCE_OF_encode_aper(asn_TYPE_descriptor_t *td,
+	asn_per_constraints_t *constraints, void *sptr, asn_per_outp_t *po) {
+	asn_anonymous_sequence_ *list;
+	asn_per_constraint_t *ct;
+	asn_enc_rval_t er;
+	asn_TYPE_member_t *elm = td->elements;
+	int seq;
+
+	if(!sptr) ASN__ENCODE_FAILED;
+	list = _A_SEQUENCE_FROM_VOID(sptr);
+
+	er.encoded = 0;
+
+	ASN_DEBUG("Encoding %s as SEQUENCE OF size (%d) using ALIGNED PER", td->name, list->count);
+
+	if(constraints) ct = &constraints->size;
+	else if(td->per_constraints) ct = &td->per_constraints->size;
+	else ct = 0;
+
+	/* If extensible constraint, check if size is in root */
+	if(ct) {
+		int not_in_root = (list->count < ct->lower_bound
+				|| list->count > ct->upper_bound);
+		ASN_DEBUG("lb %lld ub %lld %s",
+			ct->lower_bound, ct->upper_bound,
+			ct->flags & APC_EXTENSIBLE ? "ext" : "fix");
+		if(ct->flags & APC_EXTENSIBLE) {
+			/* Declare whether size is in extension root */
+			if(per_put_few_bits(po, not_in_root, 1))
+				ASN__ENCODE_FAILED;
+			if(not_in_root) ct = 0;
+		} else if(not_in_root && ct->effective_bits >= 0)
+			ASN__ENCODE_FAILED;
+	}
+
+	if(ct && ct->effective_bits >= 0) {
+		/* X.691, #19.5: No length determinant */
+//		 if(per_put_few_bits(po, list->count - ct->lower_bound,
+//				 ct->effective_bits))
+//			 ASN__ENCODE_FAILED;
+		if (aper_put_length(po, ct->upper_bound - ct->lower_bound + 1, list->count - ct->lower_bound) < 0)
+			ASN__ENCODE_FAILED;
+	}
+
+	for(seq = -1; seq < list->count;) {
+		ssize_t mayEncode;
+		if(seq < 0) seq = 0;
+		if(ct && ct->effective_bits >= 0) {
+			mayEncode = list->count;
+		} else {
+			mayEncode = aper_put_length(po, -1, list->count - seq);
+			if(mayEncode < 0) ASN__ENCODE_FAILED;
+		}
+
+		while(mayEncode--) {
+			void *memb_ptr = list->array[seq++];
+			if(!memb_ptr) ASN__ENCODE_FAILED;
+			er = elm->type->aper_encoder(elm->type,
+				elm->per_constraints, memb_ptr, po);
+			if(er.encoded == -1)
+				ASN__ENCODE_FAILED;
+		}
+	}
+
+	ASN__ENCODED_OK(er);
+}

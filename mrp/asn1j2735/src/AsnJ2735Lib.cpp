@@ -4,2109 +4,1949 @@
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
-#include <iostream>
-#include <fstream>
-#include <sstream>
+#include <algorithm>
 #include <bitset>
-#include <arpa/inet.h>  // htonl, htons, ntohl & ntohs, may need <netinet/in.h>
+#include <cmath>
+#include <iostream>
+#include <string>
+#include <vector>
 
-#include "dsrcConsts.h"
+// asn1
+#include <asn_application.h>
+#include "BasicSafetyMessage.h"
+#include "MapData.h"
+#include "SPAT.h"
+#include "SignalRequestMessage.h"
+#include "SignalStatusMessage.h"
+
+// asn1j2735
 #include "AsnJ2735Lib.h"
-#include "MapDataStruct.h"
-#include "wmeUtils.h"
 
-using namespace std;
+/// convert number of bits to number of bytes
+auto numbits2numbytes = [](ssize_t bit_nums)->size_t
+	{return((bit_nums <= 0) ? (0) : ((bit_nums + 7) >> 3));};
 
-const bool AsnJ2735Lib::BigEndian = is_big_endian();
-const double AsnJ2735Lib::msPosAccur2Lsb = 20.0;
-const double AsnJ2735Lib::msOrient2Lsb = 65535 / 360.0;
-const double AsnJ2735Lib::msSpeed2Lsb = 50.0;
-const double AsnJ2735Lib::msHeading2Lsb = 80.0;
-const double AsnJ2735Lib::msLsb2SteeringAngle = 1.5;
-const int AsnJ2735Lib::msTimeMarkUnKnown = 0;
-const double AsnJ2735Lib::kmph2mps = 10./36.0;
-const double AsnJ2735Lib::msUnavailableElement = -1000.0; 
-const BSM_element_t msInitialBsmElement = {{0,0,0,0.0,0.0,AsnJ2735Lib::msUnavailableElement,AsnJ2735Lib::msUnavailableElement,
-  AsnJ2735Lib::msUnavailableElement,AsnJ2735Lib::msUnavailableElement,7,AsnJ2735Lib::msUnavailableElement,0.0,AsnJ2735Lib::msUnavailableElement,
-  AsnJ2735Lib::msUnavailableElement,AsnJ2735Lib::msUnavailableElement,AsnJ2735Lib::msUnavailableElement,0.0,0x800,5.0,2.0}};
-const map<uint32_t,MsgEnum::phasestate_enum_t::vehicular> AsnJ2735Lib::msPhaseState2ColorMap = createLightColorMap();
-const map<uint32_t,MsgEnum::phasestate_enum_t::pedestrian> AsnJ2735Lib::msPedState2ColorMap = createPedLightColorMap();
+/// convert unsigned long to OCTET STRING with preallocated buffer
+auto ul2octString = [](uint8_t* pbuf, int size, unsigned long value)->void
+{ // OCTET STRING is in network byte order
+	for (int i = 0; i < size; i++)
+	{
+		unsigned int shift_bits = (size - 1 - i) * 8;
+		pbuf[i] = (uint8_t)((value >> shift_bits) & 0xFF);
+	}
+};
 
-bool AsnJ2735Lib::is_big_endian(void)
+/// convert OCTET STRING to unsigned long
+auto octString2ul = [](const uint8_t* pbuf, int size)->unsigned long
+{ // OCTET STRING is in network byte order
+	unsigned long ret = 0;
+	for (int i = 0; i < size; i++)
+		ret = (ret << 8) | pbuf[i];
+	return(ret);
+};
+
+/// convert BIT STRING to unsigned long
+auto bitString2ul = [](const uint8_t* pbuf, int size, int bits_unused)->unsigned long
 {
-  union 
-  {
-    uint32_t i;
-    uint8_t  c[4];
-  } bint = {0x01020304};
+	unsigned long ret = octString2ul(pbuf, size);
+	return(ret >> bits_unused);
+};
 
-  return (bint.c[0] == 1); 
-}
-
-map<uint32_t,MsgEnum::phasestate_enum_t::vehicular> AsnJ2735Lib::createLightColorMap(void)
+/// convert unsigned long to BIT STRING
+auto ul2bitString = [](uint8_t** pbuf, int& num_bytes, int& bits_unused, int num_bits, unsigned long value)->bool
 {
-  map<uint32_t,MsgEnum::phasestate_enum_t::vehicular> m;
-  m[0x00000000] = MsgEnum::phasestate_enum_t::UNKNOWN;
-  m[0x00000001] = MsgEnum::phasestate_enum_t::GREEN;     // BALL_GREEN
-  m[0x00000010] = MsgEnum::phasestate_enum_t::GREEN;     // LEFTARROW_GREEN
-  m[0x00000100] = MsgEnum::phasestate_enum_t::GREEN;     // RIGHTARROW_GREEN
-  m[0x00001000] = MsgEnum::phasestate_enum_t::GREEN;     // STRAIGHTARROW_GREEN
-  m[0x01000000] = MsgEnum::phasestate_enum_t::GREEN;     // UTURNARROW_GREEN    
-  m[0x00000002] = MsgEnum::phasestate_enum_t::YELLOW;
-  m[0x00000020] = MsgEnum::phasestate_enum_t::YELLOW;
-  m[0x00000200] = MsgEnum::phasestate_enum_t::YELLOW;
-  m[0x00002000] = MsgEnum::phasestate_enum_t::YELLOW;
-  m[0x02000000] = MsgEnum::phasestate_enum_t::YELLOW;
-  m[0x00000004] = MsgEnum::phasestate_enum_t::RED;
-  m[0x00000040] = MsgEnum::phasestate_enum_t::RED;
-  m[0x00000400] = MsgEnum::phasestate_enum_t::RED;
-  m[0x00004000] = MsgEnum::phasestate_enum_t::RED;
-  m[0x04000000] = MsgEnum::phasestate_enum_t::RED;    
-  m[0x00000008] = MsgEnum::phasestate_enum_t::FLASHING;
-  m[0x00000080] = MsgEnum::phasestate_enum_t::FLASHING;
-  m[0x00000800] = MsgEnum::phasestate_enum_t::FLASHING;
-  m[0x00008000] = MsgEnum::phasestate_enum_t::FLASHING;
-  m[0x08000000] = MsgEnum::phasestate_enum_t::FLASHING;
-  return m;
-}
+	int bytes = (num_bits / 8) + (((num_bits % 8) > 0) ? 1 : 0);
+	if ((*pbuf = (uint8_t *)calloc(bytes, sizeof(uint8_t))) == NULL)
+		return(false);
+	num_bytes = bytes;
+	bits_unused = bytes * 8 - num_bits;
+	ul2octString(*pbuf, bytes, value << bits_unused);
+	return(true);
+};
 
-map<uint32_t,MsgEnum::phasestate_enum_t::pedestrian> AsnJ2735Lib::createPedLightColorMap(void)
+/// convert uint32_t vehicle ID to Temporary ID
+auto vehId2temporaryId = [](uint8_t** pbuf, int& size, unsigned long value)->bool
+{ // Temporary ID has 4 bytes
+	if ((*pbuf = (uint8_t *)calloc(4, sizeof(uint8_t))) == NULL)
+		return(false);
+	size = 4;
+	ul2octString(*pbuf, 4, value);
+	return(true);
+};
+
+size_t AsnJ2735Lib::encode_mapdata_payload(const MapData_element_t& mapDataIn, uint8_t* buf, size_t size)
 {
-  map<uint32_t,MsgEnum::phasestate_enum_t::pedestrian> m;
-  m[0x00] = MsgEnum::phasestate_enum_t::UNAVAILABLE;
-  m[0x01] = MsgEnum::phasestate_enum_t::STOP;
-  m[0x02] = MsgEnum::phasestate_enum_t::CAUTION;
-  m[0x03] = MsgEnum::phasestate_enum_t::WALK;
-  return m;
+	std::string allocate_level{"MapData"};
+	MapData_t* pMapData = (MapData_t *)calloc(1, sizeof(MapData_t));
+	if (pMapData == NULL)
+	{
+		std::cerr << "encode_mapdata_payload: failed allocate " << allocate_level << std::endl;
+		return(0);
+	}
+	// MapData:
+	// -- Required objects ------------------------------------ //
+	//	msgIssueRevision
+	// -- OPTIONAL objects ------------ including/excluding  -- //
+	//	MinuteOfTheYear                     EXCL
+	//	LayerType                           INCL
+	//	LayerID                             EXCL
+	//	IntersectionGeometryList            INCL
+	//	RoadSegmentList                     EXCL
+	//	DataParameters                      EXCL
+	//	RestrictionClassList                EXCL
+	//	RegionalExtension                   EXCL
+	// -------------------------------------------------------- //
+
+	// msgIssueRevision
+	pMapData->msgIssueRevision	= mapDataIn.mapVersion;
+	// LayerType
+	if ((pMapData->layerType = (LayerType_t *)calloc(1, sizeof(LayerType_t))) == NULL)
+	{
+		std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+		std::cerr << ", failed allocate " << allocate_level << ".LayerType" << std::endl;
+		free(pMapData);
+		return(0);
+	}
+	*(pMapData->layerType) = LayerType_intersectionData;
+
+	// IntersectionGeometryList - one intersection per MapData
+	allocate_level += ".IntersectionGeometryList";
+	pMapData->intersections = (IntersectionGeometryList_t *)calloc(1, sizeof(IntersectionGeometryList_t));
+	if (pMapData->intersections != NULL) // one IntersectionGeometry per distinct speed limit
+		pMapData->intersections->list.array = (IntersectionGeometry_t **)calloc(mapDataIn.speeds.size(), sizeof(IntersectionGeometry_t *));
+	if ((pMapData->intersections == NULL) || (pMapData->intersections->list.array == NULL))
+	{
+		std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+		std::cerr << ", failed allocate " << allocate_level << std::endl;
+		if (pMapData->intersections != NULL)
+			free(pMapData->intersections);
+		free(pMapData->layerType);
+		free(pMapData);
+		return(0);
+	}
+	pMapData->intersections->list.size = static_cast<int>(mapDataIn.speeds.size());
+
+	// loop through distinct speed limits
+	allocate_level += ".IntersectionGeometry";
+	bool has_error = false;  // for earlier return
+	int& geoListCnt = pMapData->intersections->list.count;
+	for (const auto& speed_limit : mapDataIn.speeds)
+	{	// get indexes of approaches and number of lanes having the targeted speed limit
+		std::vector<uint8_t> approachIndex;
+		size_t num_lanes = 0;
+		for (auto it = mapDataIn.mpApproaches.begin(); it != mapDataIn.mpApproaches.end(); ++it)
+		{
+			if ((it->speed_limit == speed_limit) && (!it->mpLanes.empty()))
+			{
+				approachIndex.push_back((uint8_t)(it - mapDataIn.mpApproaches.begin()));
+				num_lanes += it->mpLanes.size();
+			}
+		}
+		// get the reference lane width for this speed group
+		uint16_t refLaneWidth = mapDataIn.mpApproaches[approachIndex[0]].mpLanes[0].width;
+		// allocate IntersectionGeometry - one per speed group
+		if ((pMapData->intersections->list.array[geoListCnt] = (IntersectionGeometry_t *)calloc(1, sizeof(IntersectionGeometry_t))) == NULL)
+		{
+			std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+			std::cerr << ", failed allocate " << allocate_level << std::endl;
+			has_error = true;
+			break;
+		}
+		IntersectionGeometry_t* pIntersectionGeometry = pMapData->intersections->list.array[geoListCnt];
+		// IntersectionGeometry:
+		// -- Required objects ------------------------------------ //
+		//	IntersectionReferenceID
+		//	MsgCount
+		//	Position3D
+		//	LaneList
+		// -- OPTIONAL objects ------------ including/excluding  -- //
+		//	DescriptiveName                     EXCL
+		//	LaneWidth                           INCL
+		//	SpeedLimitList                      INCL
+		//	PreemptPriorityList                 EXCL
+		//	RegionalExtension                   EXCL
+		// -------------------------------------------------------- //
+
+		// IntersectionReferenceID
+		pIntersectionGeometry->id.id = mapDataIn.id;
+		// MsgCount
+		pIntersectionGeometry->revision = geoListCnt++;
+		// Position3D
+		pIntersectionGeometry->refPoint.lat = mapDataIn.geoRef.latitude;
+		pIntersectionGeometry->refPoint.Long = mapDataIn.geoRef.longitude;
+		if (mapDataIn.attributes.test(0))
+		{ // include elevation data
+			if ((pIntersectionGeometry->refPoint.elevation = (Elevation_t *)calloc(1, sizeof(Elevation_t))) == NULL)
+			{
+				std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+				std::cerr << ", failed allocate " << allocate_level << ".Position3D.Elevation" << std::endl;
+				has_error = true;
+				break;
+			}
+			*(pIntersectionGeometry->refPoint.elevation) = mapDataIn.geoRef.elevation;
+		}
+		// LaneWidth
+		if ((pIntersectionGeometry->laneWidth = (LaneWidth_t *)calloc(1, sizeof(LaneWidth_t))) == NULL)
+		{
+			std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+			std::cerr << ", failed allocate " << allocate_level << ".LaneWidth" << std::endl;
+			has_error = true;
+			break;
+		}
+		*(pIntersectionGeometry->laneWidth) = refLaneWidth;
+		// SpeedLimitList
+		if ((speed_limit > 0) && (speed_limit < MsgEnum::unknown_speed))
+		{ // 0 = crosswalk, MsgEnum::unknown_speed = speed limit not available on vehicular lanes
+			pIntersectionGeometry->speedLimits = (SpeedLimitList_t *)calloc(1, sizeof(SpeedLimitList_t));
+			if (pIntersectionGeometry->speedLimits != NULL)
+				pIntersectionGeometry->speedLimits->list.array = (RegulatorySpeedLimit_t **)calloc(1, sizeof(RegulatorySpeedLimit_t *));
+			if ((pIntersectionGeometry->speedLimits == NULL) || (pIntersectionGeometry->speedLimits->list.array == NULL))
+			{
+				std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+				std::cerr << ", failed allocate " << allocate_level << ".SpeedLimitList" << std::endl;
+				has_error = true;
+				break;
+			}
+			pIntersectionGeometry->speedLimits->list.size = 1;
+			if ((pIntersectionGeometry->speedLimits->list.array[0] = (RegulatorySpeedLimit_t *)calloc(1, sizeof(RegulatorySpeedLimit_t))) == NULL)
+			{
+				std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+				std::cerr << ", failed allocate " << allocate_level << ".SpeedLimitList.RegulatorySpeedLimit" << std::endl;
+				has_error = true;
+				break;
+			}
+			pIntersectionGeometry->speedLimits->list.count = 1;
+			pIntersectionGeometry->speedLimits->list.array[0]->type  = SpeedLimitType_vehicleMaxSpeed;
+			pIntersectionGeometry->speedLimits->list.array[0]->speed = speed_limit;
+		}
+
+		// LaneList
+		std::string branch_level{".LaneList"};
+		if ((pIntersectionGeometry->laneSet.list.array = (GenericLane_t **)calloc(num_lanes, sizeof(GenericLane_t *))) == NULL)
+		{
+			std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+			std::cerr << ", failed allocate " << allocate_level << branch_level << std::endl;
+			has_error = true;
+			break;
+		}
+		pIntersectionGeometry->laneSet.list.size = static_cast<int>(num_lanes);
+		branch_level += ".GenericLane";
+		int& laneListCnt = pIntersectionGeometry->laneSet.list.count;
+		// loop through approaches / lanes
+		for (const auto& i_approach :approachIndex)
+		{
+			const auto& approachStruct = mapDataIn.mpApproaches[i_approach];
+			for (const auto& laneStruct : approachStruct.mpLanes)
+			{
+				if ((pIntersectionGeometry->laneSet.list.array[laneListCnt] = (GenericLane_t *)calloc(1, sizeof(GenericLane_t))) == NULL)
+				{
+					std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+					std::cerr << ", failed allocate " << allocate_level;
+					std::cerr	<< branch_level << std::endl;
+					has_error = true;
+					break;
+				}
+				GenericLane_t* pGenericLane = pIntersectionGeometry->laneSet.list.array[laneListCnt++];
+				// GenericLane:
+				// -- Required objects ------------------------------------ //
+				//	LaneID
+				//	LaneAttributes
+				//	NodeListXY
+				// -- OPTIONAL objects ------------ including/excluding  -- //
+				//	DescriptiveName                     EXCL
+				//	ApproachID (inbound/outbound)       INCL
+				//	AllowedManeuvers                    INCL
+				//	ConnectsToList                      INCL
+				//	OverlayLaneList                     EXCL
+				//	RegionalExtension                   EXCL
+				// -------------------------------------------------------- //
+
+				// LaneID
+				pGenericLane->laneID = laneStruct.id;
+				// LaneAttributes::LaneDirection - 2 bits BIT STRING
+				std::bitset<2> direction_attributes;
+				switch(approachStruct.type)
+				{
+				case MsgEnum::approachType::inbound:
+					direction_attributes.set(0);
+					break;
+				case MsgEnum::approachType::outbound:
+					direction_attributes.set(1);
+					break;
+				case MsgEnum::approachType::crosswalk:
+					direction_attributes.set();
+					break;
+				}
+				auto& laneDirection = pGenericLane->laneAttributes.directionalUse;
+				if (!ul2bitString(&laneDirection.buf, laneDirection.size, laneDirection.bits_unused, 2, direction_attributes.to_ulong()))
+				{
+					std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+					std::cerr << ", failed allocate " << allocate_level << branch_level << ".LaneAttributes.LaneDirection" << std::endl;
+					has_error = true;
+					break;
+				}
+				// LaneAttributes::LaneSharing - 10 bits BIT STRING - 'not shared' and 'not overlapping'
+				auto& laneSharing = pGenericLane->laneAttributes.sharedWith;
+				if (!ul2bitString(&laneSharing.buf, laneSharing.size, laneSharing.bits_unused, 10, 0))
+				{
+					std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+					std::cerr << ", failed allocate " << allocate_level << branch_level << ".LaneAttributes.LaneSharing" << std::endl;
+					has_error = true;
+					break;
+				}
+				// LaneAttributes::LaneTypeAttributes
+				auto& laneTypeAttributes = pGenericLane->laneAttributes.laneType;
+				if (approachStruct.type == MsgEnum::approachType::crosswalk)
+				{ // Crosswalk - 16 bits BIT STRING
+					laneTypeAttributes.present = LaneTypeAttributes_PR_crosswalk;
+					auto& crosswalk = laneTypeAttributes.choice.crosswalk;
+					if (!ul2bitString(&crosswalk.buf, crosswalk.size, crosswalk.bits_unused, 16, laneStruct.attributes.to_ulong()))
+					{
+						std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+						std::cerr << ", failed allocate " << allocate_level << branch_level << ".LaneAttributes.LaneTypeAttributes.Crosswalk" << std::endl;
+						has_error = true;
+						break;
+					}
+				}
+				else
+				{ // Vehicle - 8 bits BIT STRING
+					laneTypeAttributes.present = LaneTypeAttributes_PR_vehicle;
+					auto& vehicle = laneTypeAttributes.choice.vehicle;
+					if (!ul2bitString(&vehicle.buf, vehicle.size, vehicle.bits_unused, 8, (laneStruct.attributes.to_ulong() & 0xFF)))
+					{
+						std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+						std::cerr << ", failed allocate " << allocate_level << branch_level << ".LaneAttributes.LaneTypeAttributes.Vehicle" << std::endl;
+						has_error = true;
+						break;
+					}
+				}
+				// ApproachID
+				switch(approachStruct.type)
+				{
+				case MsgEnum::approachType::outbound:
+					if ((pGenericLane->egressApproach = (ApproachID_t *)calloc(1, sizeof(ApproachID_t))) == NULL)
+						has_error = true;
+					else
+						*(pGenericLane->egressApproach) = approachStruct.id;
+					break;
+				case MsgEnum::approachType::inbound:
+				case MsgEnum::approachType::crosswalk:
+					if ((pGenericLane->ingressApproach = (ApproachID_t *)calloc(1, sizeof(ApproachID_t))) == NULL)
+						has_error = true;
+					else
+						*(pGenericLane->ingressApproach) = approachStruct.id;
+					break;
+				}
+				if (has_error)
+				{
+					std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+					std::cerr << ", failed allocate " << allocate_level << branch_level << ".ApproachID" << std::endl;
+					break;
+				}
+				// AllowedManeuvers - 12 bits BIT STRING
+				if (approachStruct.type != MsgEnum::approachType::crosswalk)
+				{
+					if (((pGenericLane->maneuvers = (AllowedManeuvers_t *)calloc(1, sizeof(AllowedManeuvers_t))) == NULL)
+						|| !(ul2bitString(&pGenericLane->maneuvers->buf, pGenericLane->maneuvers->size,
+							pGenericLane->maneuvers->bits_unused, 12, (laneStruct.attributes.to_ulong() >> 8))))
+					{
+						std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+						std::cerr << ", failed allocate " << allocate_level << branch_level << ".AllowedManeuvers" << std::endl;
+						has_error = true;
+						break;
+					}
+				}
+
+				// ConnectsToList
+				if (!laneStruct.mpConnectTo.empty())
+				{
+					pGenericLane->connectsTo = (ConnectsToList_t *)calloc(1, sizeof(ConnectsToList_t));
+					if (pGenericLane->connectsTo != NULL)
+						pGenericLane->connectsTo->list.array = (Connection_t **)calloc(laneStruct.mpConnectTo.size(), sizeof(Connection_t *));
+					if ((pGenericLane->connectsTo == NULL) || (pGenericLane->connectsTo->list.array == NULL))
+					{
+						std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+						std::cerr << ", failed allocate " << allocate_level << branch_level << ".ConnectsToList" << std::endl;
+						has_error = true;
+						break;
+					}
+					pGenericLane->connectsTo->list.size = static_cast<int>(laneStruct.mpConnectTo.size());
+					int& connListCnt = pGenericLane->connectsTo->list.count;
+					for (const auto& connStruct : laneStruct.mpConnectTo)
+					{
+						if ((pGenericLane->connectsTo->list.array[connListCnt] = (Connection_t *)calloc(1, sizeof(Connection_t))) == NULL)
+						{
+							std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+							std::cerr << ", failed allocate " << allocate_level << branch_level << ".ConnectsToList.Connection" << std::endl;
+							has_error = true;
+							break;
+						}
+						Connection_t* pConnection = pGenericLane->connectsTo->list.array[connListCnt++];
+						// Connection::ConnectingLane
+						auto& connLane = pConnection->connectingLane;
+						connLane.lane = connStruct.laneId;
+						if (connStruct.laneManeuver != MsgEnum::maneuverType::unavailable)
+						{ // ConnectingLane::AllowedManeuvers - 12 bits BIT STRING
+							std::bitset<12> connecting_maneuvers;
+							switch(connStruct.laneManeuver)
+							{
+							case MsgEnum::maneuverType::uTurn:
+								connecting_maneuvers.set(3);
+								break;
+							case MsgEnum::maneuverType::leftTurn:
+								connecting_maneuvers.set(1);
+								break;
+							case MsgEnum::maneuverType::rightTurn:
+								connecting_maneuvers.set(2);
+								break;
+							case MsgEnum::maneuverType::straightAhead:
+							case MsgEnum::maneuverType::straight:
+								connecting_maneuvers.set(0);
+								break;
+							default:
+								break;
+							}
+							if (((connLane.maneuver = (AllowedManeuvers_t *)calloc(1, sizeof(AllowedManeuvers_t))) == NULL)
+								|| !(ul2bitString(&connLane.maneuver->buf, connLane.maneuver->size,
+									connLane.maneuver->bits_unused, 12, connecting_maneuvers.to_ulong())))
+							{
+								std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+								std::cerr << ", failed allocate " << allocate_level << branch_level;
+								std::cerr << ".ConnectsToList.Connection.connectingLane.AllowedManeuvers" << std::endl;
+								has_error = true;
+								break;
+							}
+						}
+						// Connection::IntersectionReferenceID
+						if (connStruct.intersectionId != mapDataIn.id)
+						{
+							if ((pConnection->remoteIntersection = (IntersectionReferenceID_t *)calloc(1, sizeof(IntersectionReferenceID_t))) == NULL)
+							{
+								std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;;
+								std::cerr << ", failed allocate " << allocate_level << branch_level;
+								std::cerr << ".ConnectsToList.Connection.IntersectionReferenceID" << std::endl;
+								has_error = true;
+								break;
+							}
+							pConnection->remoteIntersection->id = connStruct.intersectionId;
+						}
+						// Connection::signalGroup
+						if (laneStruct.controlPhase != 0)
+						{
+							if ((pConnection->signalGroup = (SignalGroupID_t *)calloc(1, sizeof(SignalGroupID_t))) == NULL)
+							{
+								std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+								std::cerr << ", failed allocate " << allocate_level << branch_level << ".ConnectsToList.Connection.signalGroup" << std::endl;
+								has_error = true;
+								break;
+							}
+							*(pConnection->signalGroup) = laneStruct.controlPhase;
+						}
+					} // end of loop through connectsTo
+					if (has_error)
+						break;
+				}
+
+				// NodeListXY
+				pGenericLane->nodeList.present = NodeListXY_PR_nodes; // NodeSetXY
+				auto& nodeSet = pGenericLane->nodeList.choice.nodes;
+				if ((nodeSet.list.array = (NodeXY_t **)calloc(laneStruct.mpNodes.size(), sizeof(NodeXY_t *))) == NULL)
+				{
+					std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+					std::cerr << ", failed allocate " << allocate_level << branch_level << ".NodeListXY" << std::endl;
+					has_error = true;
+					break;
+				}
+				nodeSet.list.size = static_cast<int>(laneStruct.mpNodes.size());
+				// NodeSetXY::NodeXY
+				int& nodeListCnt = nodeSet.list.count;
+				for (auto it = laneStruct.mpNodes.cbegin(); it != laneStruct.mpNodes.cend(); ++it)
+				{
+					const auto& offset_x = it->offset_x;
+					const auto& offset_y = it->offset_y;
+					uint32_t offset_dist = static_cast<uint32_t>(std::sqrt(offset_x * offset_x + offset_y * offset_y));
+					if ((nodeSet.list.array[nodeListCnt] = (NodeXY_t *)calloc(1, sizeof(NodeXY_t))) == NULL)
+					{
+						std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+						std::cerr << ", failed allocate " << allocate_level << branch_level	<< ".NodeListXY.NodeXY" << std::endl;
+						has_error = true;
+						break;
+					}
+					NodeXY_t* pNode = nodeSet.list.array[nodeListCnt++];
+					// NodeXY::NodeOffsetPointXY
+					if (offset_dist <= 511)
+					{
+						pNode->delta.present = NodeOffsetPointXY_PR_node_XY1;
+						pNode->delta.choice.node_XY1.x = offset_x;
+						pNode->delta.choice.node_XY1.y = offset_y;
+					}
+					else if (offset_dist <= 1023)
+					{
+						pNode->delta.present = NodeOffsetPointXY_PR_node_XY2;
+						pNode->delta.choice.node_XY2.x = offset_x;
+						pNode->delta.choice.node_XY2.y = offset_y;
+					}
+					else if (offset_dist <= 2047)
+					{
+						pNode->delta.present = NodeOffsetPointXY_PR_node_XY3;
+						pNode->delta.choice.node_XY3.x = offset_x;
+						pNode->delta.choice.node_XY3.y = offset_y;
+					}
+					else if (offset_dist <= 4096)
+					{
+						pNode->delta.present = NodeOffsetPointXY_PR_node_XY4;
+						pNode->delta.choice.node_XY4.x = offset_x;
+						pNode->delta.choice.node_XY4.y = offset_y;
+					}
+					else if (offset_dist <= 8191)
+					{
+						pNode->delta.present = NodeOffsetPointXY_PR_node_XY5;
+						pNode->delta.choice.node_XY5.x = offset_x;
+						pNode->delta.choice.node_XY5.y = offset_y;
+					}
+					else
+					{
+						pNode->delta.present = NodeOffsetPointXY_PR_node_XY6;
+						pNode->delta.choice.node_XY6.x = offset_x;
+						pNode->delta.choice.node_XY6.y = offset_y;
+					}
+					// NodeXY::NodeAttributeSetXY - lane width adjustment w.r.t. refLaneWidth
+					if ((laneStruct.width != refLaneWidth) && (it == laneStruct.mpNodes.cbegin()))
+					{
+						pNode->attributes = (NodeAttributeSetXY_t *)calloc(1, sizeof(NodeAttributeSetXY_t));
+						if (pNode->attributes != NULL)
+							pNode->attributes->dWidth = (Offset_B10_t *)calloc(1, sizeof(Offset_B10_t));
+						if ((pNode->attributes == NULL) || (pNode->attributes->dWidth == NULL))
+						{
+							std::cerr << "encode_mapdata_payload: intersectionId=" << mapDataIn.id;
+							std::cerr << ", failed allocate " << allocate_level << branch_level << ".NodeListXY.NodeXY.NodeAttributeSetXY" << std::endl;
+							has_error = true;
+							break;
+						}
+						*(pNode->attributes->dWidth) = laneStruct.width - refLaneWidth;
+					}
+				}
+				if (has_error)
+					break;
+			}
+			if (has_error)
+				break;
+		}
+		if (has_error)
+			break;
+	}
+	if (has_error)
+	{
+		ASN_STRUCT_FREE(asn_DEF_MapData, pMapData);
+		return(0);
+	}
+	// encode MapData
+	asn_enc_rval_t rval = uper_encode_to_buffer(&asn_DEF_MapData, pMapData, buf, size);
+	ASN_STRUCT_FREE(asn_DEF_MapData, pMapData);
+	return(numbits2numbytes(rval.encoded));
 }
 
-AsnJ2735Lib::AsnJ2735Lib(const char* ptr)
+size_t AsnJ2735Lib::decode_mapdata_payload(const uint8_t* buf, size_t size, MapData_element_t& mapDataOut)
 {
-  // allocate memory for MapDataStruct
-  mpMapData = new NmapData::MapDataStruct(ptr); 
-  if (mpMapData->mpIntersection.size() > 0)
-  {
-    // encode mapdata
-    encode_mapdata_payload(); 
-  }
-  else
-  {
-    cerr << "Failed to read nmap file " << ptr << endl;
-  }
+	MapData_t* pMapData = NULL;
+	asn_dec_rval_t rval = uper_decode(0, &asn_DEF_MapData,(void **)&pMapData, buf, size, 0, 0);
+	if (rval.code != RC_OK)
+	{
+		std::cerr << "decode_mapdata_payload: failed UPER decoding" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_MapData, pMapData);
+		return(0);
+	}
+	if ((pMapData == NULL) || (pMapData->intersections == NULL) || (pMapData->intersections->list.count == 0))
+	{
+		std::cerr << "decode_mapdata_payload: empty IntersectionGeometryList" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_MapData, pMapData);
+		return(0);
+	}
+	mapDataOut.reset();
+	mapDataOut.id = static_cast<uint16_t>(pMapData->intersections->list.array[0]->id.id);
+	mapDataOut.mapVersion = static_cast<uint8_t>(pMapData->msgIssueRevision);
+	mapDataOut.mpApproaches.resize(12);  // 8 vehicular traffic approaches plus 4 crosswalks
+	mapDataOut.attributes.set(1);        // Geometric data is included
+	const auto& position3D = pMapData->intersections->list.array[0]->refPoint;
+	mapDataOut.geoRef.latitude = static_cast<int32_t>(position3D.lat);
+	mapDataOut.geoRef.longitude = static_cast<int32_t>(position3D.Long);
+	if ((position3D.elevation != NULL) && (*(position3D.elevation) != (Elevation_t)MsgEnum::unknown_elevation))
+	{ // Elevation data is included
+		mapDataOut.attributes.set(0);
+		mapDataOut.geoRef.elevation = static_cast<int32_t>(*(position3D.elevation));
+	}
+	else
+		mapDataOut.geoRef.elevation = 0;
+	mapDataOut.mapPayload.assign(buf, buf + size);
+	// loop through speed groups
+	bool has_error = false;
+	for (int i = 0; i < pMapData->intersections->list.count; i++)
+	{
+		const IntersectionGeometry_t* pIntersectionGeometry = pMapData->intersections->list.array[i];
+		if (static_cast<uint16_t>(pIntersectionGeometry->id.id) != mapDataOut.id)
+		{
+			std::cerr << "decode_mapdata_payload: intersectionId=" << mapDataOut.id;
+			std::cerr << ", containing multiples IntersectionReferenceID" << std::endl;
+			has_error = true;
+			break;
+		}
+		if (pIntersectionGeometry->laneWidth == NULL)
+		{
+			std::cerr << "decode_mapdata_payload: intersectionId=" << mapDataOut.id;
+			std::cerr << ", missing LaneWidth" << std::endl;
+			has_error = true;
+			break;
+		}
+		uint16_t refLaneWidth = static_cast<uint16_t>(*(pIntersectionGeometry->laneWidth));
+		if (pIntersectionGeometry->laneSet.list.count == 0)
+		{
+			std::cerr << "decode_mapdata_payload: intersectionId=" << mapDataOut.id;
+			std::cerr << ", missing LaneList" << std::endl;
+			has_error = true;
+			break;
+		}
+		// speed limit for this speed group
+		const auto& firstLaneDirection = pIntersectionGeometry->laneSet.list.array[0]->laneAttributes.directionalUse;
+		uint8_t  laneDirectionalUse = static_cast<uint8_t>(bitString2ul(firstLaneDirection.buf, firstLaneDirection.size, firstLaneDirection.bits_unused));
+		if ((laneDirectionalUse < 0x01) || (laneDirectionalUse > 0x03))
+		{
+			std::cerr << "decode_mapdata_payload: intersectionId=" << mapDataOut.id;
+			std::cerr << ", unknown laneDirectionalUse=" << static_cast<unsigned int>(laneDirectionalUse);
+			std::cerr << ", bitString size=" << firstLaneDirection.size;
+			std::cerr << ", bits_unused=" << firstLaneDirection.bits_unused << std::endl;
+			has_error = true;
+			break;
+		}
+		uint16_t speed_limit = (laneDirectionalUse == 0x03) ? 0 : MsgEnum::unknown_speed;
+		// check whether or not the speed limit is set for vehicular traffic lanes
+		if ((laneDirectionalUse != 0x03) && (pIntersectionGeometry->speedLimits != NULL))
+		{ // loop through speedLimits to find SpeedLimitType_vehicleMaxSpeed entry
+			for (int j = 0; j < pIntersectionGeometry->speedLimits->list.count; j++)
+			{
+				const RegulatorySpeedLimit_t* pRegulatorySpeedLimit = pIntersectionGeometry->speedLimits->list.array[j];
+				if ((pRegulatorySpeedLimit->type == SpeedLimitType_vehicleMaxSpeed)
+					&& (pRegulatorySpeedLimit->speed != (Velocity_t)MsgEnum::unknown_speed))
+				{ // speed limit data is included
+					mapDataOut.attributes.set(2);
+					speed_limit = static_cast<uint16_t>(pRegulatorySpeedLimit->speed);
+					break;
+				}
+			}
+		}
+		// loop through lanes
+		for (int j = 0; j < pIntersectionGeometry->laneSet.list.count; j++)
+		{
+			const GenericLane_t* pGenericLane = pIntersectionGeometry->laneSet.list.array[j];
+			const auto& laneDirection = pGenericLane->laneAttributes.directionalUse;
+			uint8_t directionalUse = static_cast<uint8_t>(bitString2ul(laneDirection.buf, laneDirection.size, laneDirection.bits_unused));
+			if ((directionalUse < 0x01) || (directionalUse > 0x03))
+			{
+				std::cerr << "decode_mapdata_payload: intersectionId=" << mapDataOut.id;
+				std::cerr << ", laneId=" << pGenericLane->laneID;
+				std::cerr << ", unknown directionalUse=" << static_cast<unsigned int>(directionalUse);
+				std::cerr << ", bitString size=" << laneDirection.size;
+				std::cerr << ", bits_unused=" << laneDirection.bits_unused << std::endl;
+				has_error = true;
+				break;
+			}
+			if ((pGenericLane->ingressApproach == NULL) && (pGenericLane->egressApproach == NULL))
+			{
+				std::cerr << "decode_mapdata_payload: intersectionId=" << mapDataOut.id;
+				std::cerr << ", laneId=" << pGenericLane->laneID << ", missing ApproachID" << std::endl;
+				has_error = true;
+				break;
+			}
+			if ((directionalUse != 0x02)  // not an outbound traffic lane
+				&& ((pGenericLane->connectsTo == NULL) || (pGenericLane->connectsTo->list.count == 0)
+					|| (pGenericLane->connectsTo->list.array[0]->signalGroup == NULL)))
+			{ // required to provide signal phase that controls the movement
+				std::cerr << "decode_mapdata_payload: intersectionId=" << mapDataOut.id;
+				std::cerr << ", laneId=" << pGenericLane->laneID << ", missing ConnectsTo" << std::endl;
+				has_error = true;
+				break;
+			}
+			if ((directionalUse != 0x03) && (pGenericLane->maneuvers == NULL))
+			{ // not crosswalk
+				std::cerr << "decode_mapdata_payload: intersectionId=" << mapDataOut.id;
+				std::cerr << ", laneId=" << pGenericLane->laneID << ", missing AllowedManeuvers" << std::endl;
+				has_error = true;
+				break;
+			}
+			if ((pGenericLane->nodeList.present != NodeListXY_PR_nodes)
+				|| (pGenericLane->nodeList.choice.nodes.list.array == NULL)
+				|| (pGenericLane->nodeList.choice.nodes.list.count < 2)
+				|| (pGenericLane->nodeList.choice.nodes.list.count > 63))
+			{
+				std::cerr << "decode_mapdata_payload: intersectionId=" << mapDataOut.id;
+				std::cerr << ", laneId=" << pGenericLane->laneID << ", missing NodeListXY" << std::endl;
+				has_error = true;
+				break;
+			}
+
+			uint8_t approachId = static_cast<uint8_t>((pGenericLane->ingressApproach != NULL) ?
+				(*(pGenericLane->ingressApproach)) : (*(pGenericLane->egressApproach)));
+			if ((approachId > 0) && (approachId <= 12) && (mapDataOut.mpApproaches[approachId-1].id != approachId))
+			{ // assign ApproachStruct variables
+				mapDataOut.mpApproaches[approachId-1].id = approachId;
+				mapDataOut.mpApproaches[approachId-1].speed_limit = speed_limit;
+				if (std::find(mapDataOut.speeds.begin(), mapDataOut.speeds.end(),	speed_limit) == mapDataOut.speeds.end())
+					mapDataOut.speeds.push_back(speed_limit);
+				switch(directionalUse)
+				{
+				case 0x01:
+					mapDataOut.mpApproaches[approachId-1].type = MsgEnum::approachType::inbound;
+					break;
+				case 0x02:
+					mapDataOut.mpApproaches[approachId-1].type = MsgEnum::approachType::outbound;
+					break;
+				case 0x03:
+					mapDataOut.mpApproaches[approachId-1].type = MsgEnum::approachType::crosswalk;
+					break;
+				}
+			}
+
+			// assign LaneStruct variables
+			lane_element_t laneStruct;
+			laneStruct.id = static_cast<uint8_t>(pGenericLane->laneID);
+			laneStruct.type = (directionalUse == 0x03) ? (MsgEnum::laneType::crosswalk) : (MsgEnum::laneType::traffic);
+			const auto& laneType = pGenericLane->laneAttributes.laneType;
+			unsigned long laneTypeAttrib = (laneType.present == LaneTypeAttributes_PR_crosswalk)
+				? bitString2ul(laneType.choice.crosswalk.buf, laneType.choice.crosswalk.size, laneType.choice.crosswalk.bits_unused)
+				: bitString2ul(laneType.choice.vehicle.buf, laneType.choice.vehicle.size, laneType.choice.vehicle.bits_unused);
+			unsigned long allowedManeuvers = (directionalUse == 0x03) ? 0
+				: bitString2ul(pGenericLane->maneuvers->buf, pGenericLane->maneuvers->size, pGenericLane->maneuvers->bits_unused);
+			laneStruct.attributes = std::bitset<20>(allowedManeuvers << 8 | laneTypeAttrib);
+			laneStruct.width = ((pGenericLane->nodeList.choice.nodes.list.array[0]->attributes != NULL)
+				&& (pGenericLane->nodeList.choice.nodes.list.array[0]->attributes->dWidth != NULL))
+				? (uint16_t)(refLaneWidth + *(pGenericLane->nodeList.choice.nodes.list.array[0]->attributes->dWidth))
+				: refLaneWidth;
+			laneStruct.controlPhase = ((pGenericLane->connectsTo == NULL) || (pGenericLane->connectsTo->list.count == 0)
+				|| (pGenericLane->connectsTo->list.array[0]->signalGroup == NULL)) ? 0
+				: static_cast<uint8_t>(*(pGenericLane->connectsTo->list.array[0]->signalGroup));
+			// loop through connecting lanes
+			if (pGenericLane->connectsTo != NULL)
+			{
+				laneStruct.mpConnectTo.resize(pGenericLane->connectsTo->list.count);
+				for (int k = 0; k < pGenericLane->connectsTo->list.count; k++)
+				{ // assign ConnectStruct variables
+					const Connection_t* pConnection = pGenericLane->connectsTo->list.array[k];
+					const auto& connectingLane = pConnection->connectingLane;
+					laneStruct.mpConnectTo[k].intersectionId = (pConnection->remoteIntersection == NULL) ?
+						mapDataOut.id : static_cast<uint16_t>(pConnection->remoteIntersection->id);
+					laneStruct.mpConnectTo[k].laneId = static_cast<uint8_t>(connectingLane.lane);
+					unsigned long connecting_maneuvers = (connectingLane.maneuver == NULL) ? 0 :
+						bitString2ul(connectingLane.maneuver->buf, connectingLane.maneuver->size, connectingLane.maneuver->bits_unused);
+					switch(connecting_maneuvers)
+					{
+					case 0x00:
+						laneStruct.mpConnectTo[k].laneManeuver = MsgEnum::maneuverType::unavailable;
+						break;
+					case 0x01:
+						laneStruct.mpConnectTo[k].laneManeuver = (directionalUse == 0x01) ?
+							(MsgEnum::maneuverType::straightAhead) : (MsgEnum::maneuverType::straight);
+						break;
+					case 0x02:
+						laneStruct.mpConnectTo[k].laneManeuver = MsgEnum::maneuverType::leftTurn;
+						break;
+					case 0x04:
+						laneStruct.mpConnectTo[k].laneManeuver = MsgEnum::maneuverType::rightTurn;
+						break;
+					case 0x08:
+						laneStruct.mpConnectTo[k].laneManeuver = MsgEnum::maneuverType::uTurn;
+						break;
+					}
+				}
+			}
+			// loop through lane nodes
+			laneStruct.mpNodes.resize(pGenericLane->nodeList.choice.nodes.list.count);
+			int nodeCnt = 0;
+			for (int k = 0; k < pGenericLane->nodeList.choice.nodes.list.count; k++)
+			{
+				const NodeXY_t* pNode = pGenericLane->nodeList.choice.nodes.list.array[k];
+				int32_t offset_x, offset_y;
+				switch(pNode->delta.present)
+				{
+				case NodeOffsetPointXY_PR_node_XY1:
+					offset_x = static_cast<int32_t>(pNode->delta.choice.node_XY1.x);
+					offset_y = static_cast<int32_t>(pNode->delta.choice.node_XY1.y);
+					break;
+				case NodeOffsetPointXY_PR_node_XY2:
+					offset_x = static_cast<int32_t>(pNode->delta.choice.node_XY2.x);
+					offset_y = static_cast<int32_t>(pNode->delta.choice.node_XY2.y);
+					break;
+				case NodeOffsetPointXY_PR_node_XY3:
+					offset_x = static_cast<int32_t>(pNode->delta.choice.node_XY3.x);
+					offset_y = static_cast<int32_t>(pNode->delta.choice.node_XY3.y);
+					break;
+				case NodeOffsetPointXY_PR_node_XY4:
+					offset_x = static_cast<int32_t>(pNode->delta.choice.node_XY4.x);
+					offset_y = static_cast<int32_t>(pNode->delta.choice.node_XY4.y);
+					break;
+				case NodeOffsetPointXY_PR_node_XY5:
+					offset_x = static_cast<int32_t>(pNode->delta.choice.node_XY5.x);
+					offset_y = static_cast<int32_t>(pNode->delta.choice.node_XY5.y);
+					break;
+				case NodeOffsetPointXY_PR_node_XY6:
+					offset_x = static_cast<int32_t>(pNode->delta.choice.node_XY6.x);
+					offset_y = static_cast<int32_t>(pNode->delta.choice.node_XY6.y);
+					break;
+				default:
+					continue;
+					break;
+				}
+				laneStruct.mpNodes[nodeCnt].offset_x = offset_x;
+				laneStruct.mpNodes[nodeCnt].offset_y = offset_y;
+				nodeCnt++;
+			}
+			if (nodeCnt != pGenericLane->nodeList.choice.nodes.list.count)
+				laneStruct.mpNodes.resize(nodeCnt);
+			mapDataOut.mpApproaches[approachId-1].mpLanes.push_back(laneStruct);
+		}
+		if (has_error)
+			break;
+	}
+	ASN_STRUCT_FREE(asn_DEF_MapData, pMapData);
+	return((has_error) ? (0) : (numbits2numbytes(rval.consumed)));
 }
-  
-AsnJ2735Lib::~AsnJ2735Lib(void)
+
+size_t AsnJ2735Lib::encode_spat_payload(const SPAT_element_t& spatIn, uint8_t* buf, size_t size)
+{ // get array of signalGroupID for permitted vehicular and pedestrian phases
+	std::vector<int> signalGroupArray;
+	for (uint8_t i = 0; i < 8; i++)
+	{ // vehicular phases
+		if (spatIn.permittedPhases.test(i))
+			signalGroupArray.push_back(i);
+	}
+	for (uint8_t i = 0; i < 8; i++)
+	{ // pedestrian phases
+		if (spatIn.permittedPedPhases.test(i))
+			signalGroupArray.push_back(i + 8);
+	}
+	if (signalGroupArray.empty())
+		return(0);   // nothing to encode
+
+	std::string allocate_level{"SPAT"};
+	SPAT_t* pSPAT = (SPAT_t *)calloc(1, sizeof(SPAT_t));
+	if (pSPAT == NULL)
+	{
+		std::cerr << "encode_spat_payload: failed allocate " << allocate_level << std::endl;
+		return(0);
+	}
+	// SPAT:
+	// -- Required objects ------------------------------------ //
+	//	IntersectionStateList
+	// -- OPTIONAL objects ------------ including/excluding  -- //
+	//	MinuteOfTheYear                     EXCL
+	//	DescriptiveName                     EXCL
+	//	RegionalExtension                   EXCL
+	// -------------------------------------------------------- //
+
+	// IntersectionStateList - one intersection per SPAT
+	allocate_level += ".IntersectionStateList";
+	if ((pSPAT->intersections.list.array = (IntersectionState_t **)calloc(1, sizeof(IntersectionState_t *))) == NULL)
+	{
+		std::cerr << "encode_spat_payload: failed allocate " << allocate_level << std::endl;
+		free(pSPAT);
+		return(0);
+	}
+	pSPAT->intersections.list.size  = 1;
+	allocate_level += ".IntersectionState";
+	if ((pSPAT->intersections.list.array[0] = (IntersectionState_t *)calloc(1, sizeof(IntersectionState_t))) == NULL)
+	{
+		std::cerr << "encode_spat_payload: failed allocate " << allocate_level << std::endl;
+		free(pSPAT->intersections.list.array);
+		free(pSPAT);
+		return(0);
+	}
+	pSPAT->intersections.list.count = 1;
+	IntersectionState_t* pIntsectionState = pSPAT->intersections.list.array[0];
+	// IntersectionStateList::IntersectionState
+	// -- Required objects ------------------------------------ //
+	//	IntersectionReferenceID
+	//	MsgCount
+	//	IntersectionStatusObject
+	//	MovementList
+	// -- OPTIONAL objects ------------ including/excluding  -- //
+	//	DescriptiveName                     EXCL
+	//	MinuteOfTheYear                     OPTIONAL
+	//	DSecond                             OPTIONAL
+	//	EnabledLaneList                     EXCL
+	//	ManeuverAssistList                  EXCL
+	//	RegionalExtension                   EXCL
+	// -------------------------------------------------------- //
+
+	// IntersectionReferenceID
+	pIntsectionState->id.id = spatIn.id;
+	// MsgCount
+	pIntsectionState->revision = spatIn.msgCnt;
+	// IntersectionStatusObject - 16 bits BIT STRING
+	if (!ul2bitString(&pIntsectionState->status.buf, pIntsectionState->status.size,
+		pIntsectionState->status.bits_unused, 16, spatIn.status.to_ulong()))
+	{
+		std::cerr << "encode_spat_payload: failed allocate " << allocate_level;
+		std::cerr << ".IntersectionStatusObject" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SPAT, pSPAT);
+		return(0);
+	}
+	// TimeStamp
+	if (spatIn.timeStampMinute < MsgEnum::invalid_timeStampMinute)
+	{
+		if ((pIntsectionState->moy = (MinuteOfTheYear_t *)calloc(1, sizeof(MinuteOfTheYear_t))) == NULL)
+		{
+			std::cerr << "encode_spat_payload: failed allocate " << allocate_level;
+			std::cerr	<< ".MinuteOfTheYear" << std::endl;
+			ASN_STRUCT_FREE(asn_DEF_SPAT, pSPAT);
+			return(0);
+		}
+		*(pIntsectionState->moy) = spatIn.timeStampMinute;
+	}
+	if (spatIn.timeStampSec < 0xFFFF)
+	{
+		if ((pIntsectionState->timeStamp = (DSecond_t *)calloc(1, sizeof(DSecond_t))) == NULL)
+		{
+			std::cerr << "encode_spat_payload: failed allocate " << allocate_level;
+			std::cerr	<< ".timeStamp" << std::endl;
+			ASN_STRUCT_FREE(asn_DEF_SPAT, pSPAT);
+			return(0);
+		}
+		*(pIntsectionState->timeStamp) = spatIn.timeStampSec;
+	}
+
+	// MovementList
+	allocate_level += ".MovementList"; // one MovementState per vehicular/pedestrian signal group
+	if ((pIntsectionState->states.list.array =
+		(MovementState_t **)calloc(signalGroupArray.size(), sizeof(MovementState_t *))) == NULL)
+	{
+		std::cerr << "encode_spat_payload: failed allocate " << allocate_level << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SPAT, pSPAT);
+		return(0);
+	}
+	pIntsectionState->states.list.size  = static_cast<int>(signalGroupArray.size());
+
+	// loop through permitted movements
+	allocate_level += ".MovementState";
+	bool has_error = false;  // for earlier return
+	int& stateListCnt = pIntsectionState->states.list.count;
+	for (const auto& signal_group : signalGroupArray)
+	{
+		const PhaseState_element_t& phaseState = (signal_group < 8) ?
+			spatIn.phaseState[signal_group] : spatIn.pedPhaseState[signal_group - 8];
+		// allocate MovementState object
+		if ((pIntsectionState->states.list.array[stateListCnt] = (MovementState_t *)calloc(1, sizeof(MovementState_t))) == NULL)
+		{
+			std::cerr << "encode_spat_payload: failed allocate " << allocate_level << std::endl;
+			has_error = true;
+			break;
+		}
+		MovementState_t* pMovementState = pIntsectionState->states.list.array[stateListCnt++];
+		// MovementState
+		// -- Required objects ------------------------------------ //
+		//	SignalGroupID
+		//	MovementEventList
+		// -- OPTIONAL objects ------------ including/excluding  -- //
+		//	DescriptiveName                     EXCL
+		//	ManeuverAssistList                  EXCL
+		//	RegionalExtension                   EXCL
+		// -------------------------------------------------------- //
+
+		// SignalGroupID
+		pMovementState->signalGroup = signal_group + 1;
+		// MovementEventList - one MovementEvent per movement
+		std::string branch_level(".MovementEventList");
+		if ((pMovementState->state_time_speed.list.array =
+			(MovementEvent_t **)calloc(1, sizeof(MovementEvent_t *))) == NULL)
+		{
+			std::cerr << "encode_spat_payload: failed allocate " << allocate_level;
+			std::cerr	<< branch_level << std::endl;
+			has_error = true;
+			break;
+		}
+		pMovementState->state_time_speed.list.size  = 1;
+		branch_level += ".MovementEvent";
+		if ((pMovementState->state_time_speed.list.array[0] =
+			(MovementEvent_t *)calloc(1, sizeof(MovementEvent_t))) == NULL)
+		{
+			std::cerr << "encode_spat_payloadL: failed allocate " << allocate_level;
+			std::cerr << branch_level << std::endl;
+			has_error = true;
+			break;
+		}
+		pMovementState->state_time_speed.list.count = 1;
+		MovementEvent_t* pMovementEvent = pMovementState->state_time_speed.list.array[0];
+		// MovementEvent
+		// -- Required objects ------------------------------------ //
+		//	MovementPhaseState
+		// -- OPTIONAL objects ------------ including/excluding  -- //
+		//	TimeChangeDetails                   OPTIONAL
+		//	AdvisorySpeedList                   EXCL
+		//	RegionalExtension                   EXCL
+		// -------------------------------------------------------- //
+
+		// MovementPhaseState
+		pMovementEvent->eventState = static_cast<MovementPhaseState_t>(phaseState.currState);
+		branch_level += ".TimeChangeDetails";
+		// TimeChangeDetails
+		// -- Required objects ------------------------------------ //
+		// 	minEndTime
+		// -- OPTIONAL objects ------------ including/excluding  -- //
+		//	startTime                           OPTIONAL
+		//	maxEndTime                          OPTIONAL
+		//	likelyTime                          EXCL
+		//	confidence (on likelyTime)          EXCL
+		//	nextTime                            EXCL
+		// -------------------------------------------------------- //
+		if (phaseState.minEndTime < MsgEnum::unknown_timeDetail)
+		{
+			if ((pMovementEvent->timing = (TimeChangeDetails *)calloc(1, sizeof(TimeChangeDetails))) == NULL)
+			{
+				std::cerr << "encode_spat_payloadL: failed allocate " << allocate_level;
+				std::cerr	<< branch_level << std::endl;
+				has_error = true;
+				break;
+			}
+			// minEndTime
+			pMovementEvent->timing->minEndTime = phaseState.minEndTime;
+			// startTime
+			if (phaseState.startTime < MsgEnum::unknown_timeDetail)
+			{
+				if ((pMovementEvent->timing->startTime = (TimeMark_t *)calloc(1, sizeof(TimeMark_t))) == NULL)
+				{
+					std::cerr << "encode_spat_payloadL: failed allocate " << allocate_level;
+					std::cerr	<< branch_level	<< ".startTime" << std::endl;
+					has_error = true;
+					break;
+				}
+				*(pMovementEvent->timing->startTime) = phaseState.startTime;
+			}
+			// maxEndTime
+			if (phaseState.maxEndTime < MsgEnum::unknown_timeDetail)
+			{
+				if ((pMovementEvent->timing->maxEndTime = (TimeMark_t *)calloc(1, sizeof(TimeMark_t))) == NULL)
+				{
+					std::cerr << "encode_spat_payloadL: failed allocate " << allocate_level;
+					std::cerr	<< branch_level	<< ".maxEndTime" << std::endl;
+					has_error = true;
+					break;
+				}
+				*(pMovementEvent->timing->maxEndTime) = phaseState.maxEndTime;
+			}
+		}
+	}
+	if (has_error)
+	{
+		ASN_STRUCT_FREE(asn_DEF_SPAT, pSPAT);
+		return(0);
+	}
+	// encode SPAT
+	asn_enc_rval_t rval = uper_encode_to_buffer(&asn_DEF_SPAT, pSPAT, buf, size);
+	ASN_STRUCT_FREE(asn_DEF_SPAT, pSPAT);
+	return(numbits2numbytes(rval.encoded));
+}
+
+size_t AsnJ2735Lib::decode_spat_payload(const uint8_t* buf, size_t size, SPAT_element_t& spatOut)
 {
-  // free memory for MapDataStruct
-  delete mpMapData;
+	SPAT_t* pSPAT = NULL;
+	asn_dec_rval_t rval = uper_decode(0, &asn_DEF_SPAT,(void **)&pSPAT, buf, size, 0, 0);
+	if (rval.code != RC_OK)
+	{
+		std::cerr << "decode_spat_payload: failed UPER decoding" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SPAT, pSPAT);
+		return(0);
+	}
+	if ((pSPAT == NULL) || (pSPAT->intersections.list.count == 0))
+	{
+		std::cerr << "decode_spat_payload: empty IntersectionStateList" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SPAT, pSPAT);
+		return(0);
+	}
+	spatOut.reset();
+	const IntersectionState_t* pIntsectionState = pSPAT->intersections.list.array[0];
+	spatOut.id = static_cast<uint16_t>(pIntsectionState->id.id);
+	spatOut.msgCnt = static_cast<uint8_t>(pIntsectionState->revision);
+	if (pIntsectionState->moy != NULL)
+		spatOut.timeStampMinute = static_cast<uint32_t>(*(pIntsectionState->moy));
+	if (pIntsectionState->timeStamp != NULL)
+		spatOut.timeStampSec = static_cast<uint16_t>(*(pIntsectionState->timeStamp));
+	spatOut.status = std::bitset<16>(bitString2ul(pIntsectionState->status.buf, pIntsectionState->status.size, pIntsectionState->status.bits_unused));
+	if (pIntsectionState->states.list.count == 0)
+	{
+		std::cerr << "decode_spat_payload: empty MovementList" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SPAT, pSPAT);
+		return(0);
+	}
+	auto& permittedPhases = spatOut.permittedPhases;
+	auto& permittedPedPhases = spatOut.permittedPedPhases;
+	bool has_error = false;
+	for (int i = 0; i < pIntsectionState->states.list.count; i++)
+	{
+		const MovementState_t* pMovementState = pIntsectionState->states.list.array[i];
+		if ((pMovementState->signalGroup < 1) || (pMovementState->signalGroup > 2 * 8))
+		{
+			std::cerr << "decode_spat_payload: invalid SignalGroupID" << std::endl;
+			has_error = true;
+			break;
+		}
+		if (pMovementState->state_time_speed.list.count == 0)
+			continue;
+		const MovementEvent_t* pMovementEvent = pMovementState->state_time_speed.list.array[0];
+		int j = static_cast<int>((pMovementState->signalGroup - 1) % 8);
+		PhaseState_element_t& phaseState = (pMovementState->signalGroup > 8) ?
+			spatOut.pedPhaseState[j] : spatOut.phaseState[j];
+		if (pMovementState->signalGroup > 8)
+			permittedPedPhases.set(j);
+		else
+			permittedPhases.set(j);
+		phaseState.currState = static_cast<MsgEnum::phaseState>(pMovementEvent->eventState);
+		if (pMovementEvent->timing != NULL)
+		{
+			phaseState.minEndTime = static_cast<uint16_t>(pMovementEvent->timing->minEndTime);
+			if (pMovementEvent->timing->startTime != NULL)
+				phaseState.startTime = static_cast<uint16_t>(*(pMovementEvent->timing->startTime));
+			if (pMovementEvent->timing->maxEndTime != NULL)
+				phaseState.maxEndTime = static_cast<uint16_t>(*(pMovementEvent->timing->maxEndTime));
+		}
+	}
+	ASN_STRUCT_FREE(asn_DEF_SPAT, pSPAT);
+	return((has_error) ? (0) : (numbits2numbytes(rval.consumed)));
 }
 
-int AsnJ2735Lib::byteNums(const uint32_t id) const
+size_t AsnJ2735Lib::encode_srm_payload(const SRM_element_t& srmIn, uint8_t* buf, size_t size)
 {
-  if (id <= 0xFF)
-    return 1;
-  else if (id <= 0xFFFF)
-    return 2;
-  else if (id <= 0xFFFFFF)
-    return 3;
-  else 
-    return 4;
+	if ((srmIn.inApprochId == 0) && (srmIn.inLaneId == 0))
+	{
+		std::cerr << "encode_srm_payload: either entry approachID or laneID shall be specified" << std::endl;
+		return(0);
+	}
+
+	std::string allocate_level{"SRM"};
+	SignalRequestMessage_t* pSRM = (SignalRequestMessage_t *)calloc(1, sizeof(SignalRequestMessage_t));
+	if (pSRM == NULL)
+	{
+		std::cerr << "encode_srm_payload: failed allocate " << allocate_level << std::endl;
+		return(0);
+	}
+	// SRM:
+	// -- Required objects ------------------------------------ //
+	//	DSecond
+	//	RequestorDescription
+	// -- OPTIONAL objects ------------ including/excluding  -- //
+	//	MinuteOfTheYear                     OPTIONAL
+	//	MsgCount                            OPTIONAL
+	//	SignalRequestList                   INCL
+	//	RegionalExtension                   EXCL
+	// -------------------------------------------------------- //
+
+	// DSecond
+	pSRM->second = srmIn.timeStampSec;
+	// SRM::MinuteOfTheYear
+	if (srmIn.timeStampMinute < MsgEnum::invalid_timeStampMinute)
+	{
+		if ((pSRM->timeStamp = (MinuteOfTheYear_t *)calloc(1, sizeof(MinuteOfTheYear_t))) == NULL)
+		{
+			std::cerr << "encode_srm_payload: failed allocate " << allocate_level;
+			std::cerr << ".MinuteOfTheYear" << std::endl;
+			free(pSRM);
+			return(0);
+		}
+		*(pSRM->timeStamp) = srmIn.timeStampMinute;
+	}
+	// MsgCount
+	if (srmIn.msgCnt < 0xFF)
+	{
+		if ((pSRM->sequenceNumber = (MsgCount_t *)calloc(1, sizeof(MsgCount_t))) == NULL)
+		{
+			std::cerr << "encode_srm_payload: failed allocate " << allocate_level;
+			std::cerr	<< ".MsgCount" << std::endl;
+			if (pSRM->timeStamp != NULL)
+				free(pSRM->timeStamp);
+			free(pSRM);
+			return(0);
+		}
+		*(pSRM->sequenceNumber) = srmIn.msgCnt;
+	}
+	// SignalRequestList - request for one intersection
+	std::string branch_level(".SignalRequestList");
+	pSRM->requests = (SignalRequestList_t *)calloc(1, sizeof(SignalRequestList_t));
+	if (pSRM->requests != NULL)
+		pSRM->requests->list.array = (SignalRequestPackage_t **)calloc(1, sizeof(SignalRequestPackage_t *));
+	if ((pSRM->requests == NULL) || (pSRM->requests->list.array == NULL))
+	{
+		std::cerr << "encode_srm_payload: failed allocate " << allocate_level << branch_level << std::endl;
+		if (pSRM->requests != NULL)
+			free(pSRM->requests);
+		if (pSRM->timeStamp != NULL)
+			free(pSRM->timeStamp);
+		if (pSRM->sequenceNumber != NULL)
+			free(pSRM->sequenceNumber);
+		free(pSRM);
+		return(0);
+	}
+	pSRM->requests->list.size = 1;
+	branch_level += ".SignalRequestPackage";
+	if ((pSRM->requests->list.array[0] = (SignalRequestPackage_t *)calloc(1, sizeof(SignalRequestPackage_t))) == NULL)
+	{
+		std::cerr << "encode_srm_payload: failed allocate " << allocate_level << branch_level << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	pSRM->requests->list.count = 1;
+	SignalRequestPackage_t* pSignalRequestPackage = pSRM->requests->list.array[0];
+	// SignalRequestPackage
+	// -- Required objects ------------------------------------ //
+	//	SignalRequest
+	// -- OPTIONAL objects ------------ including/excluding  -- //
+	//	minute (ETA.minutes)                OPTIONAL
+	//	second (ETA.milliseconds)           OPTIONAL
+	//	duration                            OPTIONAL
+	//	RegionalExtension                   EXCL
+	// -------------------------------------------------------- //
+
+	// ETA
+	if (srmIn.ETAminute < MsgEnum::invalid_timeStampMinute)
+	{
+		if ((pSignalRequestPackage->minute = (MinuteOfTheYear_t *)calloc(1, sizeof(MinuteOfTheYear_t))) == NULL)
+		{
+			std::cerr << "encode_srm_payload: failed allocate " << allocate_level << branch_level;
+			std::cerr << ".ETAminute" << std::endl;
+			ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+			return(0);
+		}
+		*(pSignalRequestPackage->minute) = srmIn.ETAminute;
+	}
+	if (srmIn.ETAsec < 0xFFFF)
+	{
+		if ((pSignalRequestPackage->second = (DSecond_t *)calloc(1, sizeof(DSecond_t))) == NULL)
+		{
+			std::cerr << "encode_srm_payload: failed allocate " << allocate_level << branch_level;
+			std::cerr	<< ".ETAsec" << std::endl;
+			ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+			return(0);
+		}
+		*(pSignalRequestPackage->second) = srmIn.ETAsec;
+	}
+	// duration
+	if (srmIn.duration < 0xFFFF)
+	{
+		if ((pSignalRequestPackage->duration = (DSecond_t *)calloc(1, sizeof(DSecond_t))) == NULL)
+		{
+			std::cerr << "encode_srm_payload: failed allocate " << allocate_level << branch_level;
+			std::cerr	<< ".duration" << std::endl;
+			ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+			return(0);
+		}
+		*(pSignalRequestPackage->duration) = srmIn.duration;
+	}
+	auto& signalRequest = pSignalRequestPackage->request;
+	// SignalRequest
+	// -- Required objects ------------------------------------ //
+	//	IntersectionReferenceID
+	//	RequestID
+	//	PriorityRequestType
+	//	inBoundLane
+	// -- OPTIONAL objects ------------ including/excluding  -- //
+	//	outBoundLane                        OPTIONAL
+	//	RegionalExtension                   EXCL
+	// -------------------------------------------------------- //
+
+	// IntersectionReferenceID
+	signalRequest.id.id = srmIn.intId;
+	// RequestID
+	signalRequest.requestID = srmIn.reqId;
+	// PriorityRequestType
+	signalRequest.requestType = static_cast<PriorityRequestType_t>(srmIn.reqType);
+	// inBoundLane
+	if (srmIn.inLaneId == 0)
+	{
+		signalRequest.inBoundLane.present = IntersectionAccessPoint_PR_approach;
+		signalRequest.inBoundLane.choice.approach = srmIn.inApprochId;
+	}
+	else
+	{
+		signalRequest.inBoundLane.present = IntersectionAccessPoint_PR_lane;
+		signalRequest.inBoundLane.choice.lane = srmIn.inLaneId;
+	}
+	// outBoundLane
+	if (!((srmIn.outApproachId == 0) && (srmIn.outLaneId == 0)))
+	{
+		if ((signalRequest.outBoundLane = (IntersectionAccessPoint_t *)calloc(1, sizeof(IntersectionAccessPoint_t))) == NULL)
+		{
+			std::cerr << "encode_srm_payload: failed allocate " << allocate_level << branch_level;
+			std::cerr << ".SignalRequest.outBoundLane" << std::endl;
+			ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+			return(0);
+		}
+		if (srmIn.outLaneId == 0)
+		{
+			signalRequest.outBoundLane->present = IntersectionAccessPoint_PR_approach;
+			signalRequest.outBoundLane->choice.approach = srmIn.outApproachId;
+		}
+		else
+		{
+			signalRequest.outBoundLane->present = IntersectionAccessPoint_PR_lane;
+			signalRequest.outBoundLane->choice.lane = srmIn.outLaneId;
+		}
+	}
+
+	// RequestorDescription
+	allocate_level += ".RequestorDescription";
+	auto& requestor = pSRM->requestor;
+	// RequestorDescription
+	// -- Required objects ------------------------------------ //
+	//	VehicleID
+	// -- OPTIONAL objects ------------ including/excluding  -- //
+	//	RequestorType                       INCL
+	//	RequestorPositionVector             INCL
+	//	DescriptiveName.name                EXCL
+	//	DescriptiveName.routeName           EXCL
+	//	TransitVehicleStatus                EXCL
+	//	TransitVehicleOccupancy             EXCL
+	//	DeltaTime.transitSchedule           EXCL
+	//	RegionalExtension                   EXCL
+	// -------------------------------------------------------- //
+
+	// VehicleID - TemporaryID
+	requestor.id.present = VehicleID_PR_entityID;
+	if (!vehId2temporaryId(&requestor.id.choice.entityID.buf, requestor.id.choice.entityID.size, srmIn.vehId))
+	{
+		std::cerr << "encode_srm_payload: failed allocate " << allocate_level;
+		std::cerr << ".VehicleID" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	// RequestorType
+	if ((requestor.type = (RequestorType_t *)calloc(1, sizeof(RequestorType_t))) == NULL)
+	{
+		std::cerr << "encode_srm_payload: failed allocate " << allocate_level;
+		std::cerr	<< ".RequestorType" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	// RequestorType
+	// -- Required objects ------------------------------------ //
+	//	BasicVehicleRole
+	// -- OPTIONAL objects ------------ including/excluding  -- //
+	//	RequestSubRole                      EXCL
+	//	RequestImportanceLevel              EXCL
+	//	Iso3833VehicleType                  EXCL
+	//	VehicleType                         INCL
+	//	RegionalExtension                   EXCL
+	// -------------------------------------------------------- //
+
+	// BasicVehicleRole
+	requestor.type->role = static_cast<BasicVehicleRole_t>(srmIn.vehRole);
+	// VehicleType
+	if ((requestor.type->hpmsType = (VehicleType_t *)calloc(1, sizeof(VehicleType_t))) == NULL)
+	{
+		std::cerr << "encode_srm_payload: failed allocate " << allocate_level;
+		std::cerr	<< ".RequestorType.VehicleType" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	*(requestor.type->hpmsType) = static_cast<VehicleType_t>(srmIn.vehType);
+
+	// RequestorPositionVector
+	if ((requestor.position = (RequestorPositionVector_t *)calloc(1, sizeof(RequestorPositionVector_t))) == NULL)
+	{
+		std::cerr << "encode_srm_payload: failed allocate " << allocate_level;
+		std::cerr	<< ".RequestorPositionVector" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	// RequestorPositionVector
+	// -- Required objects ------------------------------------ //
+	//	Position3D
+	// -- OPTIONAL objects ------------ including/excluding  -- //
+	//	heading                             INCL
+	//	speed                               INCL
+	// -------------------------------------------------------- //
+
+	// Position3D
+	requestor.position->position.lat  = srmIn.latitude;
+	requestor.position->position.Long = srmIn.longitude;
+	if (srmIn.elevation > MsgEnum::unknown_elevation)
+	{
+		if ((requestor.position->position.elevation = (Elevation_t *)calloc(1, sizeof(Elevation_t))) == NULL)
+		{
+			std::cerr << "encode_srm_payload: failed allocate " << allocate_level;
+			std::cerr	<< ".RequestorPositionVector.Position3D.elevation" << std::endl;
+			ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+			return(0);
+		}
+		*(requestor.position->position.elevation) = srmIn.elevation;
+	}
+	// heading
+	if ((requestor.position->heading = (Angle_t *)calloc(1, sizeof(Angle_t))) == NULL)
+	{
+		std::cerr << "encode_srm_payload: failed allocate " << allocate_level;
+		std::cerr	<< ".RequestorPositionVector.heading" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	*(requestor.position->heading) = srmIn.heading;
+	// speed
+	if ((requestor.position->speed = (TransmissionAndSpeed_t *)calloc(1, sizeof(TransmissionAndSpeed_t))) == NULL)
+	{
+		std::cerr << "encode_srm_payload: failed allocate " << allocate_level;
+		std::cerr << ".RequestorPositionVector.speed" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	requestor.position->speed->transmisson = static_cast<TransmissionState_t>(srmIn.transState);
+	requestor.position->speed->speed = srmIn.speed;
+	// encode SRM
+	asn_enc_rval_t rval = uper_encode_to_buffer(&asn_DEF_SignalRequestMessage, pSRM, buf, size);
+	ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+	return(numbits2numbytes(rval.encoded));
 }
 
-MsgEnum::phasestate_enum_t::vehicular AsnJ2735Lib::getPhaseState(const uint32_t singalLightState) const
+size_t AsnJ2735Lib::decode_srm_payload(const uint8_t* buf, size_t size, SRM_element_t& srmOut)
 {
-  map<uint32_t, MsgEnum::phasestate_enum_t::vehicular>::const_iterator it = msPhaseState2ColorMap.find(singalLightState);
-  if (it == msPhaseState2ColorMap.end())
-  {
-    return MsgEnum::phasestate_enum_t::UNKNOWN;
-  }
-  else
-  {
-    return (it->second);
-  }
+	SignalRequestMessage_t* pSRM = NULL;
+	asn_dec_rval_t rval = uper_decode(0, &asn_DEF_SignalRequestMessage, (void **)&pSRM, buf, size, 0, 0);
+	if (rval.code != RC_OK)
+	{
+		std::cerr << "decode_srm_payload: failed UPER decoding" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	if ((pSRM == NULL) || (pSRM->requests == NULL) || (pSRM->requests->list.count == 0))
+	{
+		std::cerr << "decode_srm_payload: missing SignalRequestList" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	srmOut.reset();
+	srmOut.timeStampSec = static_cast<uint16_t>(pSRM->second);
+	if (pSRM->timeStamp != NULL)
+		srmOut.timeStampMinute = static_cast<uint32_t>(*(pSRM->timeStamp));
+	if (pSRM->sequenceNumber != NULL)
+		srmOut.msgCnt = static_cast<uint8_t>(*(pSRM->sequenceNumber));
+	const SignalRequestPackage_t* pSignalRequestPackage = pSRM->requests->list.array[0];
+	if (pSignalRequestPackage->minute != NULL)
+		srmOut.ETAminute = static_cast<uint32_t>(*(pSignalRequestPackage->minute));
+	if (pSignalRequestPackage->second != NULL)
+		srmOut.ETAsec = static_cast<uint16_t>(*(pSignalRequestPackage->second));
+	if (pSignalRequestPackage->duration != NULL)
+		srmOut.duration = static_cast<uint16_t>(*(pSignalRequestPackage->duration));
+	const SignalRequest_t& signalRequest = pSignalRequestPackage->request;
+	srmOut.intId = static_cast<uint16_t>(signalRequest.id.id);
+	srmOut.reqId = static_cast<uint8_t>(signalRequest.requestID);
+	srmOut.reqType = static_cast<MsgEnum::requestType>(signalRequest.requestType);
+	if (signalRequest.inBoundLane.present == IntersectionAccessPoint_PR_approach)
+		srmOut.inApprochId = static_cast<uint8_t>(signalRequest.inBoundLane.choice.approach);
+	else if (signalRequest.inBoundLane.present == IntersectionAccessPoint_PR_lane)
+		srmOut.inLaneId = static_cast<uint8_t>(signalRequest.inBoundLane.choice.lane);
+	if (signalRequest.outBoundLane != NULL)
+	{
+		if (signalRequest.outBoundLane->present == IntersectionAccessPoint_PR_approach)
+			srmOut.outApproachId = static_cast<uint8_t>(signalRequest.outBoundLane->choice.approach);
+		else if (signalRequest.outBoundLane->present == IntersectionAccessPoint_PR_lane)
+			srmOut.outLaneId = static_cast<uint8_t>(signalRequest.outBoundLane->choice.lane);
+	}
+	const RequestorDescription_t& requestor = pSRM->requestor;
+	if (requestor.id.present != VehicleID_PR_entityID)
+	{
+		std::cerr << "decode_srm_payload: missing Temporary ID" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	srmOut.vehId = static_cast<uint32_t>(octString2ul(requestor.id.choice.entityID.buf, requestor.id.choice.entityID.size));
+	if (requestor.type == NULL)
+	{
+		std::cerr << "decode_srm_payload: missing RequestorType" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	srmOut.vehRole = static_cast<MsgEnum::basicRole>(requestor.type->role);
+	if (requestor.type->hpmsType == NULL)
+	{
+		std::cerr << "decode_srm_payload: missing VehicleType" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	srmOut.vehType = static_cast<MsgEnum::vehicleType>(*(requestor.type->hpmsType));
+	if (requestor.position == NULL)
+	{
+		std::cerr << "decode_srm_payload: missing RequestorPositionVector" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	srmOut.latitude = static_cast<int32_t>(requestor.position->position.lat);
+	srmOut.longitude = static_cast<int32_t>(requestor.position->position.Long);
+	if (requestor.position->position.elevation != NULL)
+		srmOut.elevation =static_cast<int32_t>(*(requestor.position->position.elevation));
+	if (requestor.position->heading == NULL)
+	{
+		std::cerr << "decode_srm_payload: missing heading" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	srmOut.heading = static_cast<uint16_t>(*(requestor.position->heading));
+	if (requestor.position->speed == NULL)
+	{
+		std::cerr << "decode_srm_payload: missing TransmissionAndSpeed" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+		return(0);
+	}
+	srmOut.transState = static_cast<MsgEnum::transGear>(requestor.position->speed->transmisson);
+	srmOut.speed = static_cast<uint16_t>(requestor.position->speed->speed);
+	ASN_STRUCT_FREE(asn_DEF_SignalRequestMessage, pSRM);
+	return(numbits2numbytes(rval.consumed));
 }
 
-MsgEnum::phasestate_enum_t::pedestrian AsnJ2735Lib::getPedPhaseState(const uint32_t pedLightState) const
+size_t AsnJ2735Lib::encode_ssm_payload(const SSM_element_t& ssmIn, uint8_t* buf, size_t size)
 {
-  map<uint32_t, MsgEnum::phasestate_enum_t::pedestrian>::const_iterator it = msPedState2ColorMap.find(pedLightState);
-  if (it == msPedState2ColorMap.end())
-  {
-    return MsgEnum::phasestate_enum_t::UNAVAILABLE;
-  }
-  else
-  {
-    return (it->second);
-  }
+	if (ssmIn.mpSignalRequetStatus.empty())
+		return(0);  // nothing to encode
+
+	std::string allocate_level{"SSM"};
+	SignalStatusMessage_t* pSSM = (SignalStatusMessage_t *)calloc(1, sizeof(SignalStatusMessage_t));
+	if (pSSM == NULL)
+	{
+		std::cerr << "encode_ssm_payload: failed allocate " << allocate_level << std::endl;
+		return(0);
+	}
+	// SSM:
+	// -- Required objects ------------------------------------ //
+	//	DSecond
+	//	SignalStatusList
+	// -- OPTIONAL objects ------------ including/excluding  -- //
+	//	MinuteOfTheYear                     OPTIONAL
+	//	MsgCount                            OPTIONAL
+	//	RegionalExtension                   EXCL
+	// -------------------------------------------------------- //
+
+	// DSecond
+	pSSM->second = ssmIn.timeStampSec;
+	// SSM::MinuteOfTheYear
+	if (ssmIn.timeStampMinute < MsgEnum::invalid_timeStampMinute)
+	{
+		if ((pSSM->timeStamp = (MinuteOfTheYear_t *)calloc(1, sizeof(MinuteOfTheYear_t))) == NULL)
+		{
+			std::cerr << "encode_ssm_payload: failed allocate " << allocate_level;
+			std::cerr	<< ".MinuteOfTheYear" << std::endl;
+			free(pSSM);
+			return(0);
+		}
+		*(pSSM->timeStamp) = ssmIn.timeStampMinute;
+	}
+	// MsgCount
+	if (ssmIn.msgCnt < 0xFF)
+	{
+		if ((pSSM->sequenceNumber = (MsgCount_t *)calloc(1, sizeof(MsgCount_t))) == NULL)
+		{
+			std::cerr << "encode_ssm_payload: failed allocate " << allocate_level;
+			std::cerr	<< ".MsgCount" << std::endl;
+			if (pSSM->timeStamp != NULL)
+				free(pSSM->timeStamp);
+			free(pSSM);
+			return(0);
+		}
+		*(pSSM->sequenceNumber) = ssmIn.msgCnt;
+	}
+	// SignalStatusList - one intersection per SSM
+	allocate_level += ".SignalStatusList";
+	if ((pSSM->status.list.array = (SignalStatus_t **)calloc(1, sizeof(SignalStatus_t *))) == NULL)
+	{
+		std::cerr << "encode_ssm_payload: failed allocate " << allocate_level << std::endl;
+		if (pSSM->sequenceNumber != NULL)
+			free(pSSM->sequenceNumber);
+		if (pSSM->timeStamp != NULL)
+			free(pSSM->timeStamp);
+		free(pSSM);
+		return(0);
+	}
+	pSSM->status.list.size  = 1;
+	allocate_level += ".SignalStatus";
+	if ((pSSM->status.list.array[0] = (SignalStatus_t *)calloc(1, sizeof(SignalStatus_t))) == NULL)
+	{
+		std::cerr << "encode_ssm_payload: failed allocate " << allocate_level << std::endl;
+		free(pSSM->status.list.array);
+		if (pSSM->sequenceNumber != NULL)
+			free(pSSM->sequenceNumber);
+		if (pSSM->timeStamp != NULL)
+			free(pSSM->timeStamp);
+		free(pSSM);
+		return(0);
+	}
+	pSSM->status.list.count = 1;
+	SignalStatus_t* pSignalStatus = pSSM->status.list.array[0];
+	// SignalStatus
+	// -- Required objects ------------------------------------ //
+	//	MsgCount
+	//	IntersectionReferenceID
+	//	SignalStatusPackageList
+	// -- OPTIONAL objects ------------ including/excluding  -- //
+	//	RegionalExtension                   EXCL
+	// -------------------------------------------------------- //
+
+	// MsgCount
+	pSignalStatus->sequenceNumber = ssmIn.updateCnt;
+	// IntersectionReferenceID
+	pSignalStatus->id.id = ssmIn.id;
+	// SignalStatusPackageList
+	allocate_level += ".SignalStatusPackageList";
+	if ((pSignalStatus->sigStatus.list.array = (SignalStatusPackage_t **)calloc(ssmIn.mpSignalRequetStatus.size(),
+		sizeof(SignalStatusPackage_t *))) == NULL)
+	{
+		std::cerr << "encode_ssm_payload: failed allocate " << allocate_level << std::endl;
+		free(pSSM->status.list.array[0]);
+		free(pSSM->status.list.array);
+		if (pSSM->sequenceNumber != NULL)
+			free(pSSM->sequenceNumber);
+		if (pSSM->timeStamp != NULL)
+			free(pSSM->timeStamp);
+		free(pSSM);
+		return(0);
+	}
+	pSignalStatus->sigStatus.list.size = static_cast<int>(ssmIn.mpSignalRequetStatus.size());
+
+	// loop through the list of priority/preemption requests
+	allocate_level += ".SignalStatusPackage";
+	bool has_error = false;  // for earlier return
+	int& statusListCnt = pSignalStatus->sigStatus.list.count;
+	for (const auto& signalRequetStatus : ssmIn.mpSignalRequetStatus)
+	{
+		if ((pSignalStatus->sigStatus.list.array[statusListCnt] =
+			(SignalStatusPackage_t *)calloc(1, sizeof(SignalStatusPackage_t))) = NULL)
+		{
+			std::cerr << "encode_ssm_payload: failed allocate " << allocate_level << std::endl;
+			has_error = true;
+			break;
+		}
+		SignalStatusPackage_t* pSignalStatusPackage = pSignalStatus->sigStatus.list.array[statusListCnt++];
+		// SignalStatusPackage
+		// -- Required objects ------------------------------------ //
+		//	inboundOn
+		//	PrioritizationResponseStatus
+		// -- OPTIONAL objects ------------ including/excluding  -- //
+		//	SignalRequesterInfo                 INCL
+		//	outboundOn                          OPTIONAL
+		//  ETA.minute                          OPTIONAL
+		//  ETA.second                          OPTIONAL
+		//	duration                            OPTIONAL
+		//	RegionalExtension                   EXCL
+		// -------------------------------------------------------- //
+
+		// PrioritizationResponseStatus
+		pSignalStatusPackage->status = static_cast<PrioritizationResponseStatus_t>(signalRequetStatus.status);
+		// inboundOn
+		if ((signalRequetStatus.inApprochId == 0) && (signalRequetStatus.inLaneId == 0))
+		{
+			std::cerr << "encode_ssm_payload: either entry approach or lane needs to be specified" << std::endl;
+			has_error = true;
+			break;
+		}
+		if (signalRequetStatus.inLaneId == 0)
+		{
+			pSignalStatusPackage->inboundOn.present = IntersectionAccessPoint_PR_approach;
+			pSignalStatusPackage->inboundOn.choice.approach = signalRequetStatus.inApprochId;
+		}
+		else
+		{
+			pSignalStatusPackage->inboundOn.present = IntersectionAccessPoint_PR_lane;
+			pSignalStatusPackage->inboundOn.choice.lane = signalRequetStatus.inLaneId;
+		}
+		// outboundOn
+		if (!((signalRequetStatus.outApproachId == 0) && (signalRequetStatus.outLaneId == 0)))
+		{
+			if ((pSignalStatusPackage->outboundOn =
+				(IntersectionAccessPoint_t *)calloc(1, sizeof(IntersectionAccessPoint_t))) == NULL)
+			{
+				std::cerr << "encode_ssm_payload: failed allocate " << allocate_level;
+				std::cerr << ".outboundOn" << std::endl;
+				has_error = true;
+				break;
+			}
+			if (signalRequetStatus.outLaneId == 0)
+			{
+				pSignalStatusPackage->outboundOn->present = IntersectionAccessPoint_PR_approach;
+				pSignalStatusPackage->outboundOn->choice.approach = signalRequetStatus.outApproachId;
+			}
+			else
+			{
+				pSignalStatusPackage->outboundOn->present = IntersectionAccessPoint_PR_lane;
+				pSignalStatusPackage->outboundOn->choice.lane = signalRequetStatus.outLaneId;
+			}
+		}
+		// ETA
+		if (signalRequetStatus.ETAminute < MsgEnum::invalid_timeStampMinute)
+		{
+			if ((pSignalStatusPackage->minute =	(MinuteOfTheYear_t *)calloc(1, sizeof(MinuteOfTheYear_t))) == NULL)
+			{
+				std::cerr << "encode_ssm_payload: failed allocate " << allocate_level;
+				std::cerr	<< ".ETAminute" << std::endl;
+				has_error = true;
+				break;
+			}
+			*(pSignalStatusPackage->minute) = signalRequetStatus.ETAminute;
+		}
+		if (signalRequetStatus.ETAsec < 0xFFFF)
+		{
+			if ((pSignalStatusPackage->second = (DSecond_t *)calloc(1, sizeof(DSecond_t))) == NULL)
+			{
+				std::cerr << "encode_ssm_payload: failed allocate " << allocate_level;
+				std::cerr	<< ".ETAsec" << std::endl;
+				has_error = true;
+				break;
+			}
+			*(pSignalStatusPackage->second) = signalRequetStatus.ETAsec;
+		}
+		// duration
+		if (signalRequetStatus.duration < 0xFFFF)
+		{
+			if ((pSignalStatusPackage->duration = (DSecond_t *)calloc(1, sizeof(DSecond_t))) == NULL)
+			{
+				std::cerr << "encode_ssm_payload: failed allocate " << allocate_level;
+				std::cerr	<< ".duration" << std::endl;
+				has_error = true;
+				break;
+			}
+			*(pSignalStatusPackage->duration) = signalRequetStatus.duration;
+		}
+		// SignalRequesterInfo
+		if ((pSignalStatusPackage->requester = (SignalRequesterInfo_t *)calloc(1, sizeof(SignalRequesterInfo_t))) == NULL)
+		{
+			std::cerr << "encode_ssm_payload: failed allocate " << allocate_level;
+			std::cerr	<< ".SignalRequesterInfo" << std::endl;
+			has_error = true;
+			break;
+		}
+		// SignalRequesterInfo
+		// -- Required objects ------------------------------------ //
+		//	VehicleID
+		//	RequestID
+		//	MsgCount
+		// -- OPTIONAL objects ------------ including/excluding  -- //
+		//	BasicVehicleRole                    OPTIONAL
+		//	RequestorType                       EXCL
+		// -------------------------------------------------------- //
+
+		// VehicleID - TemporaryID
+		pSignalStatusPackage->requester->id.present = VehicleID_PR_entityID;
+		if (!vehId2temporaryId(&pSignalStatusPackage->requester->id.choice.entityID.buf,
+			pSignalStatusPackage->requester->id.choice.entityID.size, signalRequetStatus.vehId))
+		{
+			std::cerr << "encode_ssm_payload: failed allocate " << allocate_level;
+			std::cerr	<< ".SignalRequesterInfo.VehicleID" << std::endl;
+			has_error = true;
+			break;
+		}
+		// RequestID
+		pSignalStatusPackage->requester->request = signalRequetStatus.reqId;
+		// MsgCount
+		pSignalStatusPackage->requester->sequenceNumber = signalRequetStatus.sequenceNumber;
+		// BasicVehicleRole
+		if (signalRequetStatus.vehRole != MsgEnum::basicRole::unavailable)
+		{
+			if ((pSignalStatusPackage->requester->role = (BasicVehicleRole_t *)calloc(1, sizeof(BasicVehicleRole_t))) == NULL)
+			{
+				std::cerr << "encode_ssm_payload: failed allocate " << allocate_level;
+				std::cerr	<< ".SignalRequesterInfo.BasicVehicleRole" << std::endl;
+				has_error = true;
+				break;
+			}
+			*(pSignalStatusPackage->requester->role) = static_cast<BasicVehicleRole_t>(signalRequetStatus.vehRole);
+		}
+	}
+	if (has_error)
+	{
+		ASN_STRUCT_FREE(asn_DEF_SignalStatusMessage, pSSM);
+		return(0);
+	}
+	// encode SSM
+	asn_enc_rval_t rval = uper_encode_to_buffer(&asn_DEF_SignalStatusMessage, pSSM, buf, size);
+	ASN_STRUCT_FREE(asn_DEF_SignalStatusMessage, pSSM);
+	return(numbits2numbytes(rval.encoded));
 }
 
-size_t AsnJ2735Lib::getIntersectionNums(void) const
+size_t AsnJ2735Lib::decode_ssm_payload(const uint8_t* buf, size_t size, SSM_element_t& ssmOut)
 {
-  return (mpMapData->getIntersectionNums());
+	SignalStatusMessage_t* pSSM	= NULL;
+	asn_dec_rval_t rval = uper_decode(0, &asn_DEF_SignalStatusMessage,(void **)&pSSM, buf, size, 0, 0);
+	if (rval.code != RC_OK)
+	{
+		std::cerr << "decode_ssm_payload: failed UPER decoding" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalStatusMessage, pSSM);
+		return(0);
+	}
+	if ((pSSM == NULL) || (pSSM->status.list.count == 0))
+	{
+		std::cerr << "decode_ssm_payload: empty SignalStatusList" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalStatusMessage, pSSM);
+		return(0);
+	}
+	ssmOut.reset();
+	ssmOut.timeStampSec = static_cast<uint16_t>(pSSM->second);
+	if (pSSM->timeStamp != NULL)
+		ssmOut.timeStampMinute = static_cast<uint32_t>(*(pSSM->timeStamp));
+	if (pSSM->sequenceNumber != NULL)
+		ssmOut.msgCnt = static_cast<uint8_t>(*(pSSM->sequenceNumber));
+	const SignalStatus_t* pSignalStatus = pSSM->status.list.array[0];
+	ssmOut.updateCnt = static_cast<uint8_t>(pSignalStatus->sequenceNumber);
+	ssmOut.id = static_cast<uint16_t>(pSignalStatus->id.id);
+	if (pSignalStatus->sigStatus.list.count == 0)
+	{
+		std::cerr << "decode_ssm_payload: empty SignalStatusPackageList" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_SignalStatusMessage, pSSM);
+		return(0);
+	}
+	ssmOut.mpSignalRequetStatus.resize(pSignalStatus->sigStatus.list.count);
+	bool has_error = false;
+	for (int i = 0; i < pSignalStatus->sigStatus.list.count; i++)
+	{
+		const SignalStatusPackage_t* pSignalStatusPackage = pSignalStatus->sigStatus.list.array[i];
+		SignalRequetStatus_t& signalRequetStatus = ssmOut.mpSignalRequetStatus[i];
+		signalRequetStatus.reset();
+		signalRequetStatus.status = static_cast<MsgEnum::requestStatus>(pSignalStatusPackage->status);
+		if (pSignalStatusPackage->inboundOn.present == IntersectionAccessPoint_PR_approach)
+			signalRequetStatus.inApprochId = static_cast<uint8_t>(pSignalStatusPackage->inboundOn.choice.approach);
+		else if (pSignalStatusPackage->inboundOn.present == IntersectionAccessPoint_PR_lane)
+			signalRequetStatus.inLaneId = static_cast<uint8_t>(pSignalStatusPackage->inboundOn.choice.lane);
+		if (pSignalStatusPackage->outboundOn != NULL)
+		{
+			if (pSignalStatusPackage->outboundOn->present == IntersectionAccessPoint_PR_approach)
+				signalRequetStatus.outApproachId = static_cast<uint8_t>(pSignalStatusPackage->outboundOn->choice.approach);
+			else if (pSignalStatusPackage->outboundOn->present == IntersectionAccessPoint_PR_lane)
+				signalRequetStatus.outLaneId = static_cast<uint8_t>(pSignalStatusPackage->outboundOn->choice.lane);
+		}
+		if (pSignalStatusPackage->minute != NULL)
+			signalRequetStatus.ETAminute = static_cast<uint32_t>(*(pSignalStatusPackage->minute));
+		if (pSignalStatusPackage->second != NULL)
+			signalRequetStatus.ETAsec = static_cast<uint16_t>(*(pSignalStatusPackage->second));
+		if (pSignalStatusPackage->duration != NULL)
+			signalRequetStatus.duration = static_cast<uint16_t>(*(pSignalStatusPackage->duration));
+		if (pSignalStatusPackage->requester == NULL)
+		{
+			std::cerr << "decode_ssm_payload: missing SignalRequesterInfo" << std::endl;
+			has_error = true;
+			break;
+		}
+		if (pSignalStatusPackage->requester->id.present != VehicleID_PR_entityID)
+		{
+			std::cerr << "decode_ssm_payload: missing Temporary ID" << std::endl;
+			has_error = true;
+			break;
+		}
+		signalRequetStatus.vehId = static_cast<uint32_t>(octString2ul(pSignalStatusPackage->requester->id.choice.entityID.buf,
+			pSignalStatusPackage->requester->id.choice.entityID.size));
+		signalRequetStatus.reqId = static_cast<uint8_t>(pSignalStatusPackage->requester->request);
+		signalRequetStatus.sequenceNumber = static_cast<uint8_t>(pSignalStatusPackage->requester->sequenceNumber);
+		if (pSignalStatusPackage->requester->role == NULL)
+		{
+			std::cerr << "decode_ssm_payload: missing BasicVehicleRole" << std::endl;
+			has_error = true;
+			break;
+		}
+		signalRequetStatus.vehRole = static_cast<MsgEnum::basicRole>(*(pSignalStatusPackage->requester->role));
+	}
+	ASN_STRUCT_FREE(asn_DEF_SignalStatusMessage, pSSM);
+	return((has_error) ? (0) : (numbits2numbytes(rval.consumed)));
 }
 
-uint8_t AsnJ2735Lib::getMapVersion(const uint32_t intersectionId) const
+size_t AsnJ2735Lib::encode_bsm_payload(const BSM_element_t& bsmIn, uint8_t* buf, size_t size)
 {
-  return (mpMapData->getMapVersion(intersectionId));
+	std::string allocate_level{"BSM"};
+	BasicSafetyMessage_t* pBSM = (BasicSafetyMessage_t *)calloc(1, sizeof(BasicSafetyMessage_t));
+	if (pBSM == NULL)
+	{
+		std::cerr << "encode_bsm_payload: failed allocate " << allocate_level << std::endl;
+		return(0);
+	}
+	// BSM:
+	// -- Required objects ------------------------------------ //
+	//	BSMcoreData
+	// -- OPTIONAL objects ------------ including/excluding  -- //
+	//	partII                              EXCL
+	//	RegionalExtension                   EXCL
+	// -------------------------------------------------------- //
+	allocate_level += ".BSMcoreData";
+	auto& coreData = pBSM->coreData;
+	coreData.msgCnt = bsmIn.msgCnt;
+	// BSMcoreData::TemporaryID
+	if (!vehId2temporaryId(&coreData.id.buf, coreData.id.size, bsmIn.id))
+	{
+		std::cerr << "encode_bsm_payload: failed allocate " << allocate_level;
+		std::cerr << ".TemporaryID" << std::endl;
+		free(pBSM);
+		return(0);
+	}
+	coreData.secMark = bsmIn.timeStampSec;
+	coreData.lat = bsmIn.latitude;
+	coreData.Long = bsmIn.longitude;
+	coreData.elev = bsmIn.elevation;
+	coreData.accuracy.semiMajor = bsmIn.semiMajor;
+	coreData.accuracy.semiMinor = bsmIn.semiMinor;
+	coreData.accuracy.orientation = bsmIn.orientation;
+	coreData.transmission = static_cast<TransmissionState_t>(bsmIn.transState);
+	coreData.speed = bsmIn.speed;
+	coreData.heading = bsmIn.heading;
+	coreData.angle = bsmIn.steeringAngle;
+	coreData.accelSet.Long = bsmIn.accelLon;
+	coreData.accelSet.lat = bsmIn.accelLat;
+	coreData.accelSet.vert = bsmIn.accelVert;
+	coreData.accelSet.yaw = bsmIn.yawRate;
+	coreData.size.width = bsmIn.vehWidth;
+	coreData.size.length = bsmIn.vehLen;
+	allocate_level += ".BrakeSystemStatus";
+	auto& brakeSystemStatus = coreData.brakes;
+	auto& wheelBrakes = brakeSystemStatus.wheelBrakes;  // SIZE (5) BIT STRING
+	if (!ul2bitString(&wheelBrakes.buf, wheelBrakes.size, wheelBrakes.bits_unused, 5, bsmIn.brakeAppliedStatus.to_ulong()))
+	{
+		std::cerr << "encode_bsm_payload: failed allocate " << allocate_level;
+		std::cerr	<< ".BrakeAppliedStatus" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_BasicSafetyMessage, pBSM);
+		return(0);
+	}
+	brakeSystemStatus.traction = static_cast<TractionControlStatus_t>(bsmIn.tractionControlStatus);
+	brakeSystemStatus.abs = static_cast<AntiLockBrakeStatus_t>(bsmIn.absStatus);
+	brakeSystemStatus.scs = static_cast<StabilityControlStatus_t>(bsmIn.stabilityControlStatus);
+	brakeSystemStatus.brakeBoost = static_cast<BrakeBoostApplied_t>(bsmIn.brakeBoostApplied);
+	brakeSystemStatus.auxBrakes = static_cast<AuxiliaryBrakeStatus_t>(bsmIn.auxiliaryBrakeStatus);
+	// encode BSM
+	asn_enc_rval_t rval = uper_encode_to_buffer(&asn_DEF_BasicSafetyMessage, pBSM, buf, size);
+	ASN_STRUCT_FREE(asn_DEF_BasicSafetyMessage, pBSM);
+	return(numbits2numbytes(rval.encoded));
 }
 
-size_t AsnJ2735Lib::getIntersectionIdList(uint32_t* list,const size_t size) const
+size_t AsnJ2735Lib::decode_bsm_payload(const uint8_t* buf, size_t size, BSM_element_t& bsmOut)
 {
-  return (mpMapData->getIntersectionIdList(list,size));
+	BasicSafetyMessage_t* pBSM = NULL;
+	asn_dec_rval_t rval = uper_decode(0, &asn_DEF_BasicSafetyMessage,(void **)&pBSM, buf, size, 0, 0);
+	if (rval.code != RC_OK)
+	{
+		std::cerr << "decode_bsm_payload: failed UPER decoding" << std::endl;
+		ASN_STRUCT_FREE(asn_DEF_BasicSafetyMessage, pBSM);
+		return(0);
+	}
+	const auto& coreData = pBSM->coreData;
+	bsmOut.msgCnt = static_cast<uint8_t>(coreData.msgCnt);
+	bsmOut.id = static_cast<uint32_t>(octString2ul(coreData.id.buf, coreData.id.size));
+	bsmOut.timeStampSec = static_cast<uint16_t>(coreData.secMark);
+	bsmOut.latitude = static_cast<int32_t>(coreData.lat);
+	bsmOut.longitude = static_cast<int32_t>(coreData.Long);
+	bsmOut.elevation = static_cast<int32_t>(coreData.elev);
+	bsmOut.semiMajor = static_cast<uint8_t>(coreData.accuracy.semiMajor);
+	bsmOut.semiMinor = static_cast<uint8_t>(coreData.accuracy.semiMinor);
+	bsmOut.orientation = static_cast<uint16_t>(coreData.accuracy.orientation);
+	bsmOut.speed = static_cast<uint16_t>(coreData.speed);
+	bsmOut.heading = static_cast<uint16_t>(coreData.heading);
+	bsmOut.steeringAngle = static_cast<int8_t>(coreData.angle);
+	bsmOut.accelLon = static_cast<int16_t>(coreData.accelSet.Long);
+	bsmOut.accelLat = static_cast<int16_t>(coreData.accelSet.lat);
+	bsmOut.accelVert = static_cast<int8_t>(coreData.accelSet.vert);
+	bsmOut.yawRate = static_cast<int16_t>(coreData.accelSet.yaw);
+	bsmOut.vehWidth = static_cast<uint16_t>(coreData.size.width);
+	bsmOut.vehLen = static_cast<uint16_t>(coreData.size.length);
+	bsmOut.transState	= static_cast<MsgEnum::transGear>(coreData.transmission);
+	const auto& brakeSystemStatus = coreData.brakes;
+	const auto& wheelBrakes = brakeSystemStatus.wheelBrakes;
+	bsmOut.brakeAppliedStatus = std::bitset<5>(bitString2ul(wheelBrakes.buf, wheelBrakes.size, wheelBrakes.bits_unused));
+	bsmOut.tractionControlStatus = static_cast<MsgEnum::engageStatus>(brakeSystemStatus.traction);
+	bsmOut.absStatus = static_cast<MsgEnum::engageStatus>(brakeSystemStatus.abs);
+	bsmOut.stabilityControlStatus = static_cast<MsgEnum::engageStatus>(brakeSystemStatus.scs);
+	bsmOut.brakeBoostApplied = static_cast<MsgEnum::engageStatus>(brakeSystemStatus.brakeBoost);
+	bsmOut.auxiliaryBrakeStatus = static_cast<MsgEnum::engageStatus>(brakeSystemStatus.auxBrakes);
+	ASN_STRUCT_FREE(asn_DEF_BasicSafetyMessage, pBSM);
+	return(numbits2numbytes(rval.consumed));
 }
-
-uint32_t AsnJ2735Lib::getIntersectionIdByName(const char* intersectionName) const
-{
-  return (mpMapData->getIntersectionIdByName(intersectionName));
-}
-
-size_t AsnJ2735Lib::getIntersectionNameById(const uint32_t intersectionId,char *intersectionName,const size_t size) const
-{
-  return (mpMapData->getIntersectionNameById(intersectionId,intersectionName,size));
-}
-
-string AsnJ2735Lib::getIntersectionNameById(const uint32_t intersectionId) const
-{
-  return (mpMapData->getIntersectionNameById(intersectionId));
-}
-
-uint8_t AsnJ2735Lib::getControlPhaseByLaneId(const uint32_t intersectionId,const uint8_t laneId) const
-{
-  return (mpMapData->getControlPhaseByLaneId(intersectionId,laneId));
-}
-
-uint32_t AsnJ2735Lib::getLaneLength(const uint32_t intersectionId,const uint8_t laneId) const
-{
-  return (mpMapData->getLaneLength(intersectionId,laneId));  
-}
-
-string AsnJ2735Lib::getIntersectionNameByIndex(const uint8_t intersectionIndex) const
-{
-  return (mpMapData->getIntersectionNameByIndex(intersectionIndex));
-}
-
-int AsnJ2735Lib::getIndexByIntersectionId(const uint32_t intersectionId) const
-{
-  return (mpMapData->getIndexByIntersectionId(intersectionId));
-}
-
-void AsnJ2735Lib::updateLocationAware(const GeoUtils::vehicleTracking_t& vehicleTrackingState,GeoUtils::locationAware_t& vehicleLocationAware) const
-{
-  mpMapData->updateLocationAware(vehicleTrackingState,vehicleLocationAware);
-}
-
-bool AsnJ2735Lib::locateVehicleInMap(const GeoUtils::connectedVehicle_t& cv,GeoUtils::vehicleTracking_t& cvTrackingState) const
-{
-  return (mpMapData->locateVehicleInMap(cv,cvTrackingState));
-}
-
-void AsnJ2735Lib::getPtDist2D(const GeoUtils::vehicleTracking_t& vehicleTrackingState, GeoUtils::point2D_t& pt) const
-{
-  return (mpMapData->getPtDist2D(vehicleTrackingState,pt));
-}
-
-size_t AsnJ2735Lib::get_mapdata_payload(const char* intersectionName,char* ptr,const size_t size,bool withHeader) const
-{
-  uint32_t intersectionId = getIntersectionIdByName(intersectionName);
-  return (get_mapdata_payload(intersectionId,ptr,size,withHeader));
-}
-
-size_t AsnJ2735Lib::get_mapdata_payload(const uint32_t intersectionId,char* ptr,const size_t size,bool withHeader) const
-{
-  int index = mpMapData->getIndexByIntersectionId(intersectionId);
-  if (!ptr || index < 0 || mpMapData->mpIntersection[index].mapPayload.size() + 1 > size)
-  {
-    return 0;
-  }
-  else if (withHeader)
-  {
-    MsgEnum::msg_enum_t::MSGTYPE msgtype = MsgEnum::msg_enum_t::MAP_PKT;
-    string str = wmeUtils::fillAradaUdp(msgtype,mpMapData->mpIntersection[index].mapPayload.c_str(),
-      mpMapData->mpIntersection[index].mapPayload.size());
-    memcpy(ptr,str.c_str(),str.size() + 1);
-    return (str.size() + 1);
-  }
-  else
-  {
-    memcpy(ptr,mpMapData->mpIntersection[index].mapPayload.c_str(), mpMapData->mpIntersection[index].mapPayload.size() + 1);
-    return (mpMapData->mpIntersection[index].mapPayload.size());
-  } 
-}
-
-uint16_t AsnJ2735Lib::crc16(const char *data_p, const size_t len) const
-{
-  u_char i;
-  uint32_t data;
-  uint32_t crc = 0;
-  size_t length = len;
-  
-  if (length == 0)
-  {
-    return (static_cast<uint16_t>( ~crc & 0xFFFF ));
-  }
-  
-  do
-  {
-    for (i=0, data=(uint32_t)0xff & *data_p++; i < 8; i++, data >>= 1)
-    {
-      if ((crc & 0x0001) ^ (data & 0x0001))
-      {
-        crc = (crc >> 1) ^ 0x8408;
-      }
-      else  
-      {
-        crc >>= 1;
-      }
-    }
-  } while (--length);
-
-  crc = ~crc;
-  data = crc;
-  crc = (crc << 8) | (data >> 8 & 0xff);
-  
-  return (static_cast<uint16_t>(crc & 0xFFFF));
-}
-
-bool AsnJ2735Lib::isPhasePermitted(const uint8_t checkPhase, const uint8_t permittedPhases) const
-{
-  if ( checkPhase >= NEMAPHASES ) 
-  {
-    return false;
-  }
-  bitset<NEMAPHASES> bs(permittedPhases);
-  if (bs.test(checkPhase))
-    return true;
-  else
-    return false;
-}
-
-uint8_t AsnJ2735Lib::getNumPhases (const uint8_t permittedPhases) const
-{
-  uint8_t ret = 0;
-  for (uint8_t i=0;i<NEMAPHASES;i++)
-  {
-    if (isPhasePermitted(i,permittedPhases))
-    {
-      ret ++;
-    }
-  }
-  return (ret);
-}
-
-unsigned long AsnJ2735Lib::uchar2ulong(const u_char* ptr,const int offset, const int size) const
-{
-  // for decoding numerical element with fixed size (network byte order)
-  unsigned long l = 0;
-  
-  for (int i = 0; i < size; i++)
-  {
-    l = (l << 8) | ptr[offset+i];
-  }
-  
-  return (l);
-} 
-
-long AsnJ2735Lib::uchar2long(const u_char* ptr,const int offset, const int size) const
-{
-  // for decoding numerical element with fixed size (network byte order)
-  long l = 0;
-  
-  // keep the sign bit
-  if ( (ptr[offset] >> 7) )
-  {
-    l = -1;
-  }
-  
-  for (int i = 0; i < size; i++)
-  {
-    l = (l << 8) | ptr[offset+i];
-  }
-
-  return (l);
-}
-
-bool AsnJ2735Lib::long2uchar(u_char* ptr,const int offset,const long l,const int size) const
-{
-  // for encoding: byte order is network byte order, size is given
-  INTEGER_t st = (INTEGER_t){NULL,0}; 
-
-  if (asn_long2INTEGER(&st,l) < 0 )
-  {
-    return false;
-  }
-  
-  if (l < 0)
-  {
-    for (int i=0; i<size; i++)
-    {
-      ptr[offset+i] = 0xFF;
-    }
-  }
-  else
-  {
-    for (int i=0; i<size; i++)
-    {
-      ptr[offset+i] = 0x00;
-    }
-  } 
-  
-  int byte2copy = (st.size <= size) ? st.size : size;     
-  // copy integer body
-  for (int i = 0; i < byte2copy; i++)
-  {
-    ptr[offset+size-1-i] = st.buf[st.size-1-i];
-  }
-    
-  free(st.buf);
-  return true;
-}
-
-bool ::AsnJ2735Lib::ulong2uchar(u_char* ptr,const int offset,const unsigned long l,const int size) const
-{
-  // for encoding: byte order is network byte order, size is given
-  INTEGER_t st = (INTEGER_t){NULL,0}; 
-
-  if (asn_ulong2INTEGER(&st,l) < 0 )
-  {
-    return false;
-  }
-  
-  int byte2copy = (st.size <= size) ? st.size : size;
-      
-  // copy integer body
-  for (int i = 0; i < byte2copy; i++)
-  {
-    ptr[offset+size-1-i] = st.buf[st.size-1-i];
-  }
-    
-  free(st.buf);
-  return true;
-}
-
-int AsnJ2735Lib::ulong2char(char* ptr,const int offset,const unsigned long l) const
-{
-  INTEGER_t st = (INTEGER_t){NULL,0}; 
-
-  if (asn_ulong2INTEGER(&st,l) < 0 )
-  {
-    return (0);
-  }
-    
-  // skip leading empty byte (due to sign bit can be on)
-  int iStart = 0;
-  for (int i=0;i<st.size; i++)
-  {
-    if (static_cast<int>(st.buf[i]) != 0)
-    {
-      iStart = i;
-      break;
-    }
-  }
-    
-  int byteCount = 0;
-  for (int i=iStart; i<st.size;i++)
-  {
-    ptr[offset+byteCount] = st.buf[i];
-    byteCount ++;
-  }
-  
-  free(st.buf);
-  return (byteCount);
-}
-
-double AsnJ2735Lib::uchar2elevation(const u_char* ptr,const int offset,const int size) const
-{
-  /* 1 decimetre LSB (10 cm) (0..614390)
-    Encode elevations from 0 to 6143.9 meters above the reference ellipsoid as 0x0000 to 0xEFFF.  
-    Encode elevations from -409.5 to -0.1 meters below the reference ellipsoid, as 0xF001 to 0xFFFF
-    unknown as 0xF000 
-  */
-    
-  double elev;
-  
-  uint16_t ul = static_cast<uint16_t>(uchar2ulong(ptr,offset,size));
-  if (ul == 0xF000)
-  {
-    elev = 2*msUnavailableElement;
-  }
-  else if (ul <= 0xEFFF)
-  {
-    elev = DsrcConstants::deca2unit<uint16_t>(ul);
-  }
-  else
-  {
-    elev = DsrcConstants::deca2unit<int16_t>(static_cast<int16_t>(ul));
-  }
-  return (elev);
-}
-
-double AsnJ2735Lib::uchar2accel(const u_char* ptr,const int offset,const int size) const
-{
-  /* Acceleration (INTEGER) (-2000..2001) (size 2)
-    LSB units are 0.01 m/s^2
-    the value 2000 shall be used for values greater than 2000     
-    the value -2000 shall be used for values less than -2000  
-    a value of 2001 shall be used for Unavailable
-  */
-
-  double accel;
-  long l = uchar2long(ptr,offset,size);
-
-  if (l >= 2001 || l < -2000)
-  {
-    accel = 2*msUnavailableElement;
-  }
-  else
-  {
-    accel = DsrcConstants::hecto2unit<long>(l);
-  }
-  return (accel);
-}
-
-double AsnJ2735Lib::uchar2semiAccuracy(const u_char ch) const
-{
-  /* semiAccuracy (1 byte)
-    semi-accuracy at one standard dev, range 0-12.7 meter, LSB = .05m
-    0xFE=254=any value equal or greater than 12.70 meter
-    0xFF=255=unavailable semi-accuracy value 
-  */
-
-  double semiAccuracy;
-  if (ch == 0xFF)
-  {
-    semiAccuracy = 2*msUnavailableElement;
-  }
-  else
-  {
-    semiAccuracy = ch / msPosAccur2Lsb;
-  }
-  return (semiAccuracy);
-}
-
-u_char AsnJ2735Lib::semiAccuracy2uchar(const double semiAccuracy) const
-{
-  u_char ch;
-  if (semiAccuracy <= msUnavailableElement)
-  {
-    ch = 0xFF;
-  }
-  else
-  {
-    ch = static_cast<u_char>(semiAccuracy * msPosAccur2Lsb);
-  }
-  return (ch);
-}
-
-double AsnJ2735Lib::uchar2orientation(const u_char* ptr,const int offset,const int size) const
-{
-  /* relative to true north (0~359.9945078786 degrees)
-    LSB units of 360/65535 deg  = 0.0054932479
-    a value of 0x0000 =0 shall be 0 degrees
-    a value of 0x0001 =1 shall be 0.0054932479degrees 
-    a value of 0xFFFE =65534 shall be 359.9945078786 deg
-    a value of 0xFFFF =65535 shall be used for orientation unavailable 
-  */
-  
-  double orientation;
-  unsigned long ul = uchar2ulong(ptr,offset,size);
-  if (ul == 0xFFFF)
-  {
-    orientation = 2*msUnavailableElement;
-  }
-  else
-  {
-    orientation = static_cast<double>(ul) / msOrient2Lsb;
-  }
-  return (orientation);
-}
-
-bool AsnJ2735Lib::decode_payload(const char* ptr,const size_t size,MSG_UNION_t* ps_msg,FILE* fp) const
-{
-  wmeUtils::wsmp_header_t wsmp;
-  memset(ps_msg,0,sizeof(MSG_UNION_t));
-  ps_msg->type = MsgEnum::msg_enum_t::UNKNOWN_PKT;
-  strcpy(ps_msg->msgName,"Unknown");
-  /// decode with wsmp header first
-  size_t offset = wmeUtils::decode_wsmp_header((const uint8_t*)ptr,size,&wsmp);
-  if (offset > 0)
-  {
-    // wsmp header decoded    
-    ps_msg->headerOffset = static_cast<uint8_t>(offset);
-    ps_msg->txlength = wsmp.txlength;
-    switch(wsmp.psid)
-    {
-    case wmeUtils::WSM_PSID_BSM:
-      if (decode_bsm_payload(ptr+offset,(size_t)wsmp.txlength,&(ps_msg->bsm),fp))
-      {
-        ps_msg->type = MsgEnum::msg_enum_t::BSM_PKT;
-        strcpy(ps_msg->msgName,"BSM");        
-      }
-      break;
-    case wmeUtils::WSM_PSID_SPAT:
-      if (decode_spat_payload(ptr+offset,(size_t)wsmp.txlength,&(ps_msg->spat),fp))
-      {
-        ps_msg->type = MsgEnum::msg_enum_t::SPAT_PKT;
-        strcpy(ps_msg->msgName,"SPaT");        
-      }    
-      break;
-    case wmeUtils::WSM_PSID_MAP:
-      if (decode_mapdata_payload(ptr+offset,(size_t)wsmp.txlength,&(ps_msg->mapdata),fp))
-      {
-        ps_msg->type = MsgEnum::msg_enum_t::MAP_PKT;    
-        strcpy(ps_msg->msgName,"MAP");        
-      }    
-      break;      
-    case wmeUtils::WSM_PSID_SRM:
-      if (decode_srm_payload(ptr+offset,(size_t)wsmp.txlength,&(ps_msg->srm),fp))
-      {
-        ps_msg->type = MsgEnum::msg_enum_t::SRM_PKT;    
-        strcpy(ps_msg->msgName,"SRM");        
-      }   
-      break;
-    case wmeUtils::WSM_PSID_SSM:
-      if (decode_ssm_payload(ptr+offset,(size_t)wsmp.txlength,&(ps_msg->ssm)))
-      {
-        ps_msg->type = MsgEnum::msg_enum_t::SSM_PKT;    
-        strcpy(ps_msg->msgName,"SSM");        
-      }    
-      break;
-    default:
-      break;
-    }
-    if (ps_msg->type != MsgEnum::msg_enum_t::UNKNOWN_PKT)
-      return true;
-  }
-  
-  // no header found
-  ps_msg->headerOffset = 0;
-  ps_msg->txlength = static_cast<uint16_t>(size); 
-  if (decode_bsm_payload(ptr,size,&(ps_msg->bsm),fp))
-  {
-    ps_msg->type = MsgEnum::msg_enum_t::BSM_PKT;
-    strcpy(ps_msg->msgName,"BSM");        
-  }
-  else if (decode_spat_payload(ptr,size,&(ps_msg->spat),fp))
-  {  
-    ps_msg->type = MsgEnum::msg_enum_t::SPAT_PKT;
-    strcpy(ps_msg->msgName,"SPaT");        
-  }  
-  else if (decode_mapdata_payload(ptr,size,&(ps_msg->mapdata),fp))
-  {  
-    ps_msg->type = MsgEnum::msg_enum_t::MAP_PKT;
-    strcpy(ps_msg->msgName,"MAP");        
-  }  
-  else if (decode_srm_payload(ptr,size,&(ps_msg->srm),fp))
-  {  
-    ps_msg->type = MsgEnum::msg_enum_t::SRM_PKT;
-    strcpy(ps_msg->msgName,"SRM");        
-  }  
-  else if (decode_ssm_payload(ptr,size,&(ps_msg->ssm)))
-  {
-    ps_msg->type = MsgEnum::msg_enum_t::SSM_PKT;
-    strcpy(ps_msg->msgName,"SSM");        
-  }  
-  
-  if (ps_msg->type != MsgEnum::msg_enum_t::UNKNOWN_PKT)
-    return true;
-  else
-    return false;
-}
-
-void AsnJ2735Lib::decode_bsmblob1_payload(const u_char* pbolb,BOLB1_element_t* ps_bsmblob1) const
-{
-  int offset = 0;
-  long l;
-  unsigned long ul;
-  // blob1::msgCnt (long) (size 1)
-  ps_bsmblob1->msgCnt = (uint8_t)pbolb[offset];
-  offset += 1;
-  // blob1::TemporaryID (OCTET_STRING_t) (size 4)
-  ps_bsmblob1->id = (uint32_t)uchar2ulong(pbolb,offset,4);
-  offset += 4;  
-  // blob1::DSecond (long) (size 2)
-  ps_bsmblob1->ms = (uint16_t)uchar2ulong(pbolb,offset,2);
-  offset += 2;  
-  // blob1::Latitude (long) (size 4)
-  ps_bsmblob1->lat = DsrcConstants::damega2unit<long>(uchar2long(pbolb,offset,4));
-  offset += 4;    
-  // blob1::Longitude (long) (size 4) 
-  ps_bsmblob1->lon = DsrcConstants::damega2unit<long>(uchar2long(pbolb,offset,4));
-  offset += 4;    
-  // blob1::Elevation (OCTET_STRING_t) (size 2)
-  ps_bsmblob1->elev = uchar2elevation(pbolb,offset,2);    
-  offset += 2;    
-  // blob1::PositionalAccuracy (OCTET_STRING_t) (size 4)
-    // semiMajorAccuracy (size 1)
-    ps_bsmblob1->semiMajorAccuracy = uchar2semiAccuracy(pbolb[offset]);
-    offset += 1;          
-    // semiMinorAccuracy (size 1)
-    ps_bsmblob1->semiMinorAccuracy = uchar2semiAccuracy(pbolb[offset]);
-    offset += 1;            
-    // orientation of semi-major axis (size 2)
-    ps_bsmblob1->orientation = uchar2orientation(pbolb,offset,2);
-    offset += 2;          
-  // blob1::TransmissionAndSpeed (OCTET_STRING_t) (SIZE 2)
-  ul = uchar2ulong(pbolb,offset,2); 
-  offset += 2;
-    // Bits 14~16 to be made up of the data element DE_TransmissionState ::= (0..7) 
-    // Bits 1~13 to be made up of the data element DE_Speed ::= INTEGER (0..8191) -- Units of 0.02 m/s
-    // The value 8191 (0x1FFF) indicates that speed is unavailable
-    ps_bsmblob1->transState = static_cast<uint8_t>(ul >> 13);
-    ul = (ul & 0x1FFF);
-    if (ul == 0x1FFF) {ps_bsmblob1->speed = 2*msUnavailableElement;}
-    else {ps_bsmblob1->speed = static_cast<double>(ul) / msSpeed2Lsb;}
-  // blob1::Heading (long) (0..28800) (size 2)
-    // LSB of 0.0125 degrees
-    // A range of 0 to 359.9875 degrees
-  ps_bsmblob1->heading = (double)uchar2ulong(pbolb,offset,2) / msHeading2Lsb;
-  offset += 2;  
-  // blob1::SteeringWheelAngle (OCTET_STRING_t) (size 1)
-    // angle: LSB units of 1.5 degrees.  
-    // a range of -189 to +189 degrees
-    // 0x01 = 00 = +1.5 deg
-    // 0x81 = -126 = -189 deg and beyond
-    // 0x7E = +126 = +189 deg and beyond
-    // 0x7F = +127 to be used for unavailable
-  if (pbolb[offset] == 0x7F) {ps_bsmblob1->steeringAngle = 2*msUnavailableElement;}
-  else {ps_bsmblob1->steeringAngle = static_cast<int8_t>(pbolb[offset]) * msLsb2SteeringAngle;}
-  offset += 1;            
-  // blob1::AccelerationSet4Way (OCTET_STRING_t) (size 7)
-    // long Acceleration (long) (-2000..2001) (size 2)
-    ps_bsmblob1->accelLon = uchar2accel(pbolb,offset,2);
-    offset += 2;
-    // lat Acceleration (long) (-2000..2001) (size 2)
-    ps_bsmblob1->accelLat = uchar2accel(pbolb,offset,2);
-    offset += 2;
-    // VerticalAcceleration (long) (-127..127) (size 1)
-      // LSB units of 0.02 G steps over 
-      // a range +1.54 to -3.4G 
-      // and offset by 50  Value 50 = 0g, Value 0 = -1G
-      // value +127 = 1.54G, 
-      // value -120 = -3.4G
-      // value -121 for ranges -3.4 to -4.4G
-      // value -122 for ranges -4.4 to -5.4G
-      // value -123 for ranges -5.4 to -6.4G
-      // value -124 for ranges -6.4 to -7.4G
-      // value -125 for ranges -7.4 to -8.4G
-      // value -126 for ranges larger than -8.4G
-      // value -127 for unavailable data  
-    int8_t accelVert = static_cast<int8_t>(pbolb[offset]);
-    offset += 1;      
-    switch(accelVert)
-    {
-    case -127:
-      ps_bsmblob1->accelVert = 2*msUnavailableElement;
-      break;
-    case -126:
-      ps_bsmblob1->accelVert = -8.4;
-      break;
-    case -125:
-      ps_bsmblob1->accelVert = -7.9;
-      break;
-    case -124:
-      ps_bsmblob1->accelVert = -6.9;
-      break;
-    case -123:
-      ps_bsmblob1->accelVert = -5.9;
-      break;
-    case -122:
-      ps_bsmblob1->accelVert = -4.9;
-      break;
-    case -121:
-      ps_bsmblob1->accelVert = -3.9;
-      break;
-    default:
-      ps_bsmblob1->accelVert = accelVert * 0.02 - 1.0;
-    }
-    // YawRate (long) (-32767..32767) (size 2)
-      // LSB units of 0.01 degrees per second (signed)
-    l = uchar2long(pbolb,offset,2);
-    offset += 2;  
-    ps_bsmblob1->yawRate = DsrcConstants::hecto2unit<long>(l);
-  // blob1::BrakeSystemStatus (OCTET_STRING_t) (size 2)
-  ul = uchar2ulong(pbolb,offset,2);
-  offset += 2;    
-    // wheelBrakes              BrakeAppliedStatus      4 bits
-    // wheelBrakesUnavailable   BOOL                    1 bit (1=true)
-    // spareBit                                         1 bit (set to 0)
-    // traction                 TractionControlState    2 bits
-    // abs                      AntiLockBrakeStatus     2 bits
-    // scs                      StabilityControlStatus  2 bits
-    // brakeBoost               BrakeBoostApplied       2 bits
-    // auxBrakes                AuxiliaryBrakeStatus    2 bits
-  ps_bsmblob1->brakes = static_cast<uint16_t>(ul);
-  // blob1::VehicleSize (3 bytes)
-  ul = uchar2ulong(pbolb,offset,3);
-  offset += 3;        
-    //VehicleWidth ::= INTEGER (0..1023),  10 bits, LSB units are 1 cm
-    //VehicleLength::= INTEGER (0..16383), 14 bits, LSB units are 1 cm  
-    ps_bsmblob1->vehWidth = DsrcConstants::hecto2unit<unsigned long>(ul >> 14);
-    ps_bsmblob1->vehLen = DsrcConstants::hecto2unit<unsigned long>(ul & 0x3FFF);
-}
-
-bool AsnJ2735Lib::decode_bsm_payload(const char* ptr,const size_t size,BSM_element_t* ps_bsm,FILE* fp) const
-{
-  asn_dec_rval_t rval;              // Decoder return value 
-  BasicSafetyMessage_t* pbsm = 0;   // Type to decode
-  memset(ps_bsm,0,sizeof(BSM_element_t));
-  
-  rval = ber_decode(0, &asn_DEF_BasicSafetyMessage,(void **)&pbsm, ptr, size);
-  if (rval.code != RC_OK)
-  {
-    SEQUENCE_free(&asn_DEF_BasicSafetyMessage, pbsm, 0);
-    return false;
-  }
-  
-  if (fp)
-  {
-    xer_fprint(fp, &asn_DEF_BasicSafetyMessage, pbsm);  
-  }
-  
-  // BasicSafetyMessage::msgID (INTEGER_t)(size 1)
-  if (pbsm->msgID.buf[0] != DSRCmsgID_basicSafetyMessage)
-  {
-    SEQUENCE_free(&asn_DEF_BasicSafetyMessage, pbsm, 0);
-    return false;
-  }
-  // BasicSafetyMessage::*safetyExt (OPTIONAL)
-  // BasicSafetyMessage*status (OPTIONAL)   
-  // BasicSafetyMessage::blob1 (OCTET_STRING_t) (size BSMBLOB1SIZE)
-  if (pbsm->blob1.size != BSMBLOB1SIZE)
-  {
-    SEQUENCE_free(&asn_DEF_BasicSafetyMessage, pbsm, 0);
-    return false;
-  }
-  u_char* pbolb = (u_char *)(pbsm->blob1.buf);
-  
-  // decoding bolb
-  decode_bsmblob1_payload(pbolb,&(ps_bsm->bolb1_element));
-  
-  // free pbsm
-  SEQUENCE_free(&asn_DEF_BasicSafetyMessage, pbsm, 0);
-  return true;
-}
-
-int AsnJ2735Lib::encode_bsmblob1_payload(const BOLB1_element_t* ps_bsmblob1,u_char* bolb1) const
-{
-  int offset;
-  long l;
-  unsigned long ul;
-  
-  offset = 0;
-  // blob1::msgCnt (long) (0..127)  
-  bolb1[offset] = ps_bsmblob1->msgCnt;
-  offset += 1;
-  // blob1::TemporaryID (OCTET_STRING_t) (size 4) 
-  ulong2uchar(bolb1,offset,ps_bsmblob1->id,4);
-  offset += 4;
-  // blob1::DSecond (long) (0..65535) (size 2)  
-  ulong2uchar(bolb1,offset,(unsigned long)(ps_bsmblob1->ms),2);
-  offset += 2;  
-  // blob1::Latitude (long) (-900000000..900000001) (size 4)
-  l = DsrcConstants::unit2damega<long>(ps_bsmblob1->lat);
-  long2uchar(bolb1,offset,l,4); 
-  offset += 4;    
-  // blob1::Longitude (long) (-1800000000..1800000001) (size 4) 
-  l = DsrcConstants::unit2damega<long>(ps_bsmblob1->lon);
-  long2uchar(bolb1,offset,l,4); 
-  offset += 4;    
-  // blob1::Elevation (OCTET_STRING_t) (-409.5..6143.9)(size 2)
-  if (ps_bsmblob1->elev <= msUnavailableElement) {l = 0xF000;}
-  else {l = DsrcConstants::unit2deca<long>(ps_bsmblob1->elev);}
-  long2uchar(bolb1,offset,l,2);
-  offset += 2;    
-  // blob1::PositionalAccuracy (OCTET_STRING_t) (size 4)
-    // semi-major accuracy (1 byte) (0..12.7)
-    bolb1[offset] = semiAccuracy2uchar(ps_bsmblob1->semiMajorAccuracy);
-    offset += 1;    
-    // semi-minor accuracy (1 byte) (0..12.7)
-    bolb1[offset] = semiAccuracy2uchar(ps_bsmblob1->semiMinorAccuracy);
-    offset += 1;    
-    // orientation of semi-major axis (0..360)(2 bytes)
-    if (ps_bsmblob1->orientation <= msUnavailableElement) {ul = 0xFFFF;}
-    else {ul = static_cast<unsigned long>(ps_bsmblob1->orientation * msOrient2Lsb);}
-    ulong2uchar(bolb1,offset,ul,2); 
-    offset += 2;    
-  // blob1::TransmissionAndSpeed (OCTET_STRING_t) (2 bytes)
-    // Bits 14~16 to be made up of the data element DE_TransmissionState 
-    // Bits 1~13 to be made up of the data element DE_Speed
-  ul = (unsigned long)( (ps_bsmblob1->transState & 0x07) << 13 );
-  if (ps_bsmblob1->speed <= msUnavailableElement) {ul += 0x1FFF;}
-  else {ul += static_cast<unsigned long>(ps_bsmblob1->speed * msSpeed2Lsb);}
-  ulong2uchar(bolb1,offset,ul,2);
-  offset += 2;
-  // blob1::Heading (2 bytes) (0..28800)
-  ul = static_cast<unsigned long>(ps_bsmblob1->heading * msHeading2Lsb);
-  ulong2uchar(bolb1,offset,ul,2);
-  offset += 2;
-  // blob1::SteeringWheelAngle (1 byte) (-189..189)
-  if (ps_bsmblob1->steeringAngle <= msUnavailableElement) {bolb1[offset] = 0x7F;}
-  else {bolb1[offset] = static_cast<u_char>(ps_bsmblob1->steeringAngle * msLsb2SteeringAngle);}
-  offset += 1;
-  // blob1::AccelerationSet4Way (OCTET_STRING_t) (size 7)
-    // long Acceleration (2 bytes) (-2000..2001)
-    if (ps_bsmblob1->accelLon <= msUnavailableElement) {l = 2001;}
-    else {l = DsrcConstants::unit2hecto<long>(ps_bsmblob1->accelLon);}
-    long2uchar(bolb1,offset,l,2); 
-    offset += 2;
-    // lat  Acceleration (2 bytes)
-    if (ps_bsmblob1->accelLat <= msUnavailableElement) {l = 2001;}
-    else {l = DsrcConstants::unit2hecto<long>(ps_bsmblob1->accelLat);}
-    long2uchar(bolb1,offset,l,2); 
-    offset += 2;
-    // VerticalAcceleration (1 byte) (-3.4..1.54)
-    if (ps_bsmblob1->accelVert <= msUnavailableElement || ps_bsmblob1->accelVert > 1.54) {bolb1[offset] = 0x81;}
-    else if (ps_bsmblob1->accelVert <= -8.4) {bolb1[offset] = 0x82;}
-    else if (ps_bsmblob1->accelVert <= -7.4) {bolb1[offset] = 0x83;}
-    else if (ps_bsmblob1->accelVert <= -6.4) {bolb1[offset] = 0x84;}
-    else if (ps_bsmblob1->accelVert <= -5.4) {bolb1[offset] = 0x85;}
-    else if (ps_bsmblob1->accelVert <= -4.4) {bolb1[offset] = 0x86;}
-    else if (ps_bsmblob1->accelVert <= -3.4) {bolb1[offset] = 0x87;}
-    else {bolb1[offset] = static_cast<u_char>((ps_bsmblob1->accelVert + 1.0)/0.02);}
-    offset += 1;  
-    // YawRate (2 bytes) (-32767..32767) 
-    l = DsrcConstants::unit2hecto<long>(ps_bsmblob1->yawRate);
-    long2uchar(bolb1,offset,l,2); 
-    offset += 2;  
-  // blob1::BrakeSystemStatus (OCTET_STRING_t) (size 2)
-  ulong2uchar(bolb1,offset,ps_bsmblob1->brakes,2);  
-  offset += 2;  
-  // blob1::VehicleSize (3 bytes, width 10 bits, length 14 bits)
-  ul = ((DsrcConstants::unit2hecto<unsigned long>(ps_bsmblob1->vehWidth)) << 14) 
-    + DsrcConstants::unit2hecto<unsigned long>(ps_bsmblob1->vehLen);
-  ulong2uchar(bolb1,offset,ul,3); 
-  offset += 3;  
-  return (offset);
-}
-
-ssize_t AsnJ2735Lib::encode_bsm_payload(const BSM_element_t* ps_bsm,char* ptr,const size_t size,bool withHeader) const
-{
-  asn_enc_rval_t rval;  // Encoder return value 
-  
-  BasicSafetyMessage_t* pbsm = (BasicSafetyMessage_t *)calloc(1, sizeof(BasicSafetyMessage_t));
-  // BasicSafetyMessage::msgID (INTEGER_t)(size 1)
-  asn_long2INTEGER(&(pbsm->msgID),DSRCmsgID_basicSafetyMessage);    
-  // fill mpBsmEncode
-  u_char blob1[BSMBLOB1SIZE] = {};
-  int offset = encode_bsmblob1_payload(&(ps_bsm->bolb1_element),blob1); 
-  // BasicSafetyMessage::blob1 (OCTET_STRING_t)
-  OCTET_STRING_fromBuf(&(pbsm->blob1),(char*)blob1,offset);
-  // BasicSafetyMessage::*safetyExt (OPTIONAL)
-  // BasicSafetyMessage*status (OPTIONAL)
-  
-  // encode BSM
-  rval = der_encode_to_buffer(&asn_DEF_BasicSafetyMessage, pbsm, ptr, size);
-  // free pbsm
-  SEQUENCE_free(&asn_DEF_BasicSafetyMessage, pbsm, 0);
-  
-  if (withHeader)
-  {
-    MsgEnum::msg_enum_t::MSGTYPE msgtype = MsgEnum::msg_enum_t::BSM_PKT;  
-    string str = wmeUtils::fillAradaUdp(msgtype,ptr,rval.encoded);
-    memcpy(ptr,str.c_str(),str.size() + 1);
-    return (str.size() + 1);
-  }
-  else
-  {
-    return (rval.encoded);  
-  }
-}
-
-bool AsnJ2735Lib::decode_spat_payload(const char* ptr,const size_t size,SPAT_element_t* ps_spat,FILE* fp) const
-{
-  bool ret = true;
-  asn_dec_rval_t rval;  // Decoder return value 
-  SPAT_t* pspat = 0;    // Type to decode
-  memset(ps_spat,0,sizeof(SPAT_element_t));
-  
-  rval = ber_decode(0, &asn_DEF_SPAT,(void **)&pspat, ptr, size);
-  if (rval.code != RC_OK)
-  {
-    SEQUENCE_free(&asn_DEF_SPAT, pspat, 0);
-    return false;
-  }
-  
-  if (fp)
-  {
-    xer_fprint(fp, &asn_DEF_SPAT, pspat); 
-  }
-    
-  // SPAT::DSRCmsgID_t msgID (INTEGER_t) (size 1)
-  if (pspat->msgID.buf[0] != DSRCmsgID_signalPhaseAndTimingMessage)
-  {
-    SEQUENCE_free(&asn_DEF_SPAT, pspat, 0);
-    return false;
-  }
-  // SPAT::intersections (A_SEQUENCE_OF IntersectionState_t) (one intersection per SPaT)
-  if (pspat->intersections.list.count != 1)
-  {
-    SEQUENCE_free(&asn_DEF_SPAT, pspat, 0);
-    return false;
-  }
-  IntersectionState_t* pIntsectionState = (IntersectionState_t *)(pspat->intersections.list.array[0]);
-  // IntersectionState::*name (OCTET_STRING_t) (size 1..63)(OPTIONAL)
-  // IntersectionState::id (OCTET_STRING_t) (size 2..4)   
-    /*  higher 16 bits as the operational region (state etc)
-        lower 16 bits as the unique intersection ID in the region       
-        note that often only the lower 16 bits of this value will be sent as the operational region (state etc) will be known and not sent each time */       
-  ps_spat->id = (uint32_t)(uchar2ulong((u_char*)(pIntsectionState->id.buf),0,pIntsectionState->id.size));
-        
-  // IntersectionState::status(OCTET_STRING_t) (size 1)
-    /* with bits set as follows Bit #:
-        0    Manual Control is enabled.  Timing reported is per programmed values, etc but person at cabinet can manually request that certain intervals are terminated early (e.g. green).
-        1    Stop Time is activated and all counting/timing has stopped.
-        2    Intersection is in Conflict Flash.
-        3    Preemption is Active
-        4    Transit Signal Priority (TSP) is Active
-        5    Reserved
-        6    Reserved
-        7    Reserved as zero */  
-  ps_spat->status = pIntsectionState->status.buf[0];
-  // IntersectionState::*timeStamp (long)(0..12002)(OPTIONAL)
-  ps_spat->timeStamp = 12002;
-  if (pIntsectionState->timeStamp)
-  { 
-    ps_spat->timeStamp = static_cast<uint16_t>(*(pIntsectionState->timeStamp));
-  }
-  // IntersectionState::*lanesCnt (OPTIONAL)
-  // IntersectionState::*priority (OPTIONAL)
-  // IntersectionState::*preempt (OPTIONAL)
-  // IntersectionState::states (A_SEQUENCE_OF MovementState_t)  
-  // initial
-  PhaseState_element_t* pPhaseState;
-  bitset<NEMAPHASES> bs_vehPhase;
-  bitset<NEMAPHASES> bs_pedPhase;  
-  bs_vehPhase.reset();
-  bs_pedPhase.reset();
-  for (int i=0;i<pIntsectionState->states.list.count;i++)
-  { 
-    MovementState_t* pMovementState = (MovementState_t *)(pIntsectionState->states.list.array[i]);
-    // MovementState::*movementName (OPTIONAL)
-    // MovementState::*laneCnt (OPTIONAL)
-    // MovementState::laneSet
-    if (pMovementState->laneSet.size <= 0)
-    {
-      ret = false;
-      break;
-    }
-    uint8_t phaseId = mpMapData->getControlPhaseByLaneId(ps_spat->id,pMovementState->laneSet.buf[0]);
-
-    if (!(phaseId >= 1 && phaseId <= NEMAPHASES))
-    {
-      ret = false;
-      break;
-    }
-    --phaseId;
-    
-    // determine whether the movement is for vehicular or pedestrian
-    bool isPedMovement = false;
-    if (pMovementState->currState || pMovementState->yellState)
-    {
-      isPedMovement = false;
-      // permittedPhases
-      bs_vehPhase.set(phaseId);
-      // structure PhaseState_element_t
-      pPhaseState = &(ps_spat->phaseState[phaseId]);
-    }
-    else if (pMovementState->pedState || pMovementState->yellPedState)
-    {
-      isPedMovement = true;
-      // permittedPedPhases
-      bs_pedPhase.set(phaseId);
-      // structure PhaseState_element_t
-      pPhaseState = &(ps_spat->pedPhaseState[phaseId]);
-    }
-    else
-    {
-      continue;
-    }
-    
-    // fill PhaseState_element_t
-    // currState (MovementState::*currState | MovementState::*pedState) (OPTIONAL)
-    pPhaseState->currState = MsgEnum::phasestate_enum_t::UNKNOWN;
-    // nextState (MovementState::*yellState | MovementState::*yellPedState) (OPTIONAL)
-    pPhaseState->nextState = MsgEnum::phasestate_enum_t::UNKNOWN;
-    if (!isPedMovement)
-    {
-      // vehicular movement
-      if (pMovementState->currState)
-      {
-        // MovementState::*currState (long)(OPTIONAL)     
-        pPhaseState->currState = static_cast<uint32_t>(getPhaseState(static_cast<uint32_t>(*(pMovementState->currState))));
-      }   
-      if (pMovementState->yellState)
-      {
-        // MovementState::*yellState (long)(OPTIONAL)     
-        pPhaseState->nextState = static_cast<uint32_t>(getPhaseState(static_cast<uint32_t>(*(pMovementState->yellState))));
-      }
-    }
-    else 
-    {
-      // pedestrian movement
-      if (pMovementState->pedState)
-      {
-        // PedestrianSignalState_t *pedState (INTEGER_t)(OPTIONAL)
-        pPhaseState->currState = static_cast<uint32_t>(uchar2ulong((u_char*)(pMovementState->pedState->buf),0,pMovementState->pedState->size));
-      }
-      if (pMovementState->yellPedState)
-      {
-        // PedestrianSignalState_t *yellPedState (INTEGER_t)(OPTIONAL)
-        pPhaseState->nextState = static_cast<uint32_t>(uchar2ulong((u_char*)(pMovementState->yellPedState->buf),0,pMovementState->yellPedState->size));
-      }
-    }
-    // MovementState::timeToChange (long)
-    pPhaseState->timeToChange = static_cast<uint16_t>(pMovementState->timeToChange);
-    // MovementState::*stateConfidence(INTEGER_t)(OPTIONAL)
-    pPhaseState->stateConfidence = StateConfidence_unKnownEstimate;
-    if (pMovementState->stateConfidence)
-    {
-      pPhaseState->stateConfidence = static_cast<uint8_t>(uchar2ulong((u_char*)(pMovementState->stateConfidence->buf),0,pMovementState->stateConfidence->size));
-    }
-    // clearanceIntv (MovementState::*yellTimeToChange) (long) (OPTIONAL)
-    pPhaseState->clearanceIntv = msTimeMarkUnKnown;
-    if (pMovementState->yellTimeToChange)
-    {
-      pPhaseState->clearanceIntv = static_cast<uint16_t>(*(pMovementState->yellTimeToChange));
-    }
-    // yellStateConfidence (MovementState::*yellStateConfidence) (INTEGER_t)(OPTIONAL) 
-    pPhaseState->yellStateConfidence = StateConfidence_unKnownEstimate;
-    if (pMovementState->yellStateConfidence)
-    {
-      pPhaseState->yellStateConfidence = static_cast<uint8_t>(uchar2ulong((u_char*)(pMovementState->yellStateConfidence->buf),0,pMovementState->yellStateConfidence->size));
-    }
-    // MovementState::*vehicleCount (OPTIONAL)
-    // MovementState::*pedDetect (OPTIONAL)
-    // MovementState::*pedCount (OPTIONAL)
-  }
-  ps_spat->permittedPhases = static_cast<uint8_t>(bs_vehPhase.to_ulong());
-  ps_spat->permittedPedPhases = static_cast<uint8_t>(bs_pedPhase.to_ulong());
-  
-  // free pspat
-  SEQUENCE_free(&asn_DEF_SPAT, pspat, 0);
-  return (ret);
-}
-
-ssize_t AsnJ2735Lib::encode_spat_payload(const SPAT_element_t* ps_spat,char* ptr,const size_t size,const char* pIntersectionName,bool withHeader) const
-{
-  SPAT_element_t spat_in;
-  memcpy(&spat_in,ps_spat,sizeof(SPAT_element_t));
-  uint32_t intersectionId = getIntersectionIdByName(pIntersectionName);
-  if (intersectionId == 0)
-  {
-    return (-1);
-  }
-  spat_in.id = intersectionId;
-  return (encode_spat_payload(&spat_in,ptr,size,withHeader));
-}
-  
-ssize_t AsnJ2735Lib::encode_spat_payload(const SPAT_element_t* ps_spat,char* ptr,const size_t size,bool withHeader) const
-{
-  asn_enc_rval_t  rval;   // Encoder return value 
-  char buffer[50];
-  int len;
-  
-  uint8_t numPhases = getNumPhases(ps_spat->permittedPhases);
-  uint8_t numPedPhases = getNumPhases(ps_spat->permittedPedPhases);
-  if (numPhases == 0 && numPedPhases == 0)
-  {
-    // nothing to encode
-    return (-1);
-  }
-  
-  SPAT_t* pspat = (SPAT_t *)calloc(1, sizeof(SPAT_t));
-  // SPAT::msgID (INTEGER_t) (size 1)
-  asn_long2INTEGER(&(pspat->msgID),DSRCmsgID_signalPhaseAndTimingMessage);
-  // SPAT::*name (DescriptiveName_t) (size 1..63)(OPTIONAL)
-  // SPAT::struct SPAT__intersections intersections (A_SEQUENCE_OF IntersectionState_t) (one intersection per SPaT)
-  
-  IntersectionState_t* pIntsectionState = (IntersectionState_t *)calloc(1, sizeof(IntersectionState_t));
-  // IntersectionState::*name (DescriptiveName_t) (size 1..63)(OPTIONAL)
-  len = (int)getIntersectionNameById(ps_spat->id,buffer,sizeof(buffer)); 
-  if (len <= 0)
-  {
-    return (-1);
-  }
-  pIntsectionState->name = OCTET_STRING_new_fromBuf(&asn_DEF_DescriptiveName,buffer,len);
-  // IntersectionState::id (IntersectionID_t->OCTET_STRING_t) (size 2..4)
-  int bytenum = byteNums(ps_spat->id);
-  uint32_t intId = (BigEndian)? ps_spat->id : (htonl(ps_spat->id) >> ((sizeof(uint32_t) - bytenum) * 8));
-   (htonl(ps_spat->id) >> ((sizeof(uint32_t) - bytenum) * 8));
-  OCTET_STRING_fromBuf(&(pIntsectionState->id),(char*)&intId,bytenum);
-  // IntersectionState::status(IntersectionStatusObject_t->OCTET_STRING_t) (size 1)
-  OCTET_STRING_fromBuf(&(pIntsectionState->status),(const char*)&(ps_spat->status),1);
-  // IntersectionState::*timeStamp (TimeMark_t->long)(0..12002)(OPTIONAL)
-  pIntsectionState->timeStamp = (TimeMark_t *)calloc(1, sizeof(TimeMark_t));
-  *(pIntsectionState->timeStamp) = (TimeMark_t)(ps_spat->timeStamp);
-  // IntersectionState::*lanesCnt (1..255)(OPTIONAL)
-  // IntersectionState::*priority (OPTIONAL)
-  // IntersectionState::*preempt (OPTIONAL)
-  // IntersectionState::states (A_SEQUENCE_OF MovementState_t) (Vehicle & Ped)
-  
-  // states::MovementState for vehicle
-  for (uint8_t i=0;i<NEMAPHASES;i++)
-  {
-    if (!isPhasePermitted(i,ps_spat->permittedPhases))
-    {
-      continue;
-    }
-    const PhaseState_element_t* pPhaseState = &(ps_spat->phaseState[i]);
-    MovementState_t* pMovementState = (MovementState_t *)calloc(1, sizeof(MovementState_t));
-  
-    // MovementState::*movementName (OCTET_STRING_t) (size 1..63)(OPTIONAL)
-    // MovementState::*laneCnt (long)(0..255)(OPTIONAL)
-    // MovementState::laneSet (OCTET_STRING_t) (size 1..32)
-    len = static_cast<int>(mpMapData->getLaneSetByPhase(ps_spat->id,(uint8_t)(i+1),buffer));
-    if (len == 0)
-    {
-      continue;
-    }
-    OCTET_STRING_fromBuf(&(pMovementState->laneSet),buffer,len);
-    // MovementState::*specialState (OPTIONAL)
-    // MovementState::*currState (SignalLightState_t, long)(OPTIONAL)
-    pMovementState->currState = (SignalLightState_t *)calloc(1, sizeof(SignalLightState_t));
-    *(pMovementState->currState) = (SignalLightState_t)(pPhaseState->currState);
-    // MovementState::timeToChange (long)
-    pMovementState->timeToChange = pPhaseState->timeToChange;
-    // MovementState::*stateConfidence(INTEGER_t)(OPTIONAL)
-    pMovementState->stateConfidence = (StateConfidence_t *)calloc(1, sizeof(StateConfidence_t));
-    asn_long2INTEGER(pMovementState->stateConfidence,pPhaseState->stateConfidence);
-    // MovementState::*yellState (long)(OPTIONAL)
-    pMovementState->yellState = (SignalLightState_t *)calloc(1, sizeof(SignalLightState_t));
-    *(pMovementState->yellState) = (SignalLightState_t)(pPhaseState->nextState);
-    // MovementState::*yellTimeToChange (long)(OPTIONAL)
-    pMovementState->yellTimeToChange = (TimeMark_t *)calloc(1, sizeof(TimeMark_t));
-    *(pMovementState->yellTimeToChange) = (TimeMark_t)(pPhaseState->clearanceIntv);
-    // MovementState::*yellStateConfidence (INTEGER_t)(OPTIONAL)
-    pMovementState->yellStateConfidence = (StateConfidence_t *)calloc(1, sizeof(StateConfidence_t));
-    asn_long2INTEGER(pMovementState->yellStateConfidence,pPhaseState->yellStateConfidence);
-    // MovementState::*vehicleCount (OPTIONAL)
-    
-    // add MovementState_t to IntersectionState_t
-    asn_sequence_add(&(pIntsectionState->states), pMovementState);
-  }
-
-  // states::MovementState for pedestrian
-  for (uint8_t i=0;i<NEMAPHASES;i++)
-  {
-    if (!isPhasePermitted(i,ps_spat->permittedPedPhases))
-    {
-      continue;
-    }
-    const PhaseState_element_t* pPhaseState = &(ps_spat->pedPhaseState[i]); 
-    MovementState_t* pPedMovementState = (MovementState_t *)calloc(1, sizeof(MovementState_t));       
-    // MovementState::*movementName (OCTET_STRING_t) (size 1..63)(OPTIONAL)
-    // MovementState::*laneCnt (long)(0..255)(OPTIONAL)
-    // MovementState::laneSet (OCTET_STRING_t)
-    len = static_cast<int>(mpMapData->getLaneSetByPedPhase(ps_spat->id,(uint8_t)(i+1),buffer));
-    if (len == 0)
-    {
-      continue;
-    }
-    OCTET_STRING_fromBuf(&(pPedMovementState->laneSet),buffer,len);
-    // MovementState::*specialState (OPTIONAL)
-    // MovementState::*pedState (INTEGER_t)(OPTIONAL)
-    pPedMovementState->pedState = (PedestrianSignalState_t *)calloc(1, sizeof(PedestrianSignalState_t));
-    asn_long2INTEGER(pPedMovementState->pedState,getPedPhaseState(pPhaseState->currState));
-    // MovementState::timeToChange (long)
-    pPedMovementState->timeToChange = pPhaseState->timeToChange;
-    // MovementState::*stateConfidence(INTEGER_t)(OPTIONAL)
-    pPedMovementState->stateConfidence = (StateConfidence_t *)calloc(1, sizeof(StateConfidence_t));
-    asn_long2INTEGER(pPedMovementState->stateConfidence,pPhaseState->stateConfidence);
-    // MovementState::*yellPedState (INTEGER_t)(OPTIONAL)
-    pPedMovementState->yellPedState = (PedestrianSignalState_t *)calloc(1, sizeof(PedestrianSignalState_t));
-    asn_long2INTEGER(pPedMovementState->yellPedState,getPedPhaseState(pPhaseState->nextState));
-    // MovementState::*yellTimeToChange (long)(OPTIONAL)
-    pPedMovementState->yellTimeToChange = (TimeMark_t *)calloc(1, sizeof(TimeMark_t));
-    *(pPedMovementState->yellTimeToChange) = (TimeMark_t)(pPhaseState->clearanceIntv);
-    // MovementState::*yellStateConfidence (INTEGER_t)(OPTIONAL)
-    pPedMovementState->yellStateConfidence = (StateConfidence_t *)calloc(1, sizeof(StateConfidence_t));
-    asn_long2INTEGER(pPedMovementState->yellStateConfidence,pPhaseState->yellStateConfidence);
-    // MovementState::*pedDetect (OPTIONAL)
-    // MovementState::*pedCount (OPTIONAL)
-  
-    // add MovementState to IntersectionState
-    asn_sequence_add(&(pIntsectionState->states), pPedMovementState);   
-  }
-    
-  // add IntersectionState to SPAT
-  asn_sequence_add(&(pspat->intersections), pIntsectionState);  
-  
-  // encode SPaT
-  rval = der_encode_to_buffer(&asn_DEF_SPAT, pspat, ptr, size);
-  // free pspat
-  SEQUENCE_free(&asn_DEF_SPAT, pspat, 0);
-  if (withHeader)
-  {
-    MsgEnum::msg_enum_t::MSGTYPE msgtype = MsgEnum::msg_enum_t::SPAT_PKT;
-    string str = wmeUtils::fillAradaUdp(msgtype,ptr,rval.encoded);
-    memcpy(ptr,str.c_str(),str.size() + 1);
-    return (str.size() + 1);
-  }
-  else
-  {
-    return (rval.encoded);  
-  }
-}
-
-bool AsnJ2735Lib::decode_mapdata_payload(const char* ptr,const size_t size,Mapdata_element_t* ps_mapdata,FILE *fp) const
-{
-  asn_dec_rval_t rval;        // Decoder return value 
-  MapData_t* pmapdata = 0;    // Type to decode
-  memset(ps_mapdata,0,sizeof(Mapdata_element_t));
-  
-  rval = ber_decode(0, &asn_DEF_MapData,(void **)&pmapdata, ptr, size);
-  if (rval.code != RC_OK)
-  {
-    SEQUENCE_free(&asn_DEF_MapData, pmapdata, 0);
-    return false;
-  }
-    
-  if (fp)
-  {
-    xer_fprint(fp, &asn_DEF_MapData, pmapdata); 
-  }
-  
-  // DSRCmsgID_t   msgID
-  if (pmapdata->msgID.buf[0] != DSRCmsgID_mapData)
-  {
-    SEQUENCE_free(&asn_DEF_MapData, pmapdata, 0);
-    return false;
-  }
-  
-  // MsgCount_t  msgCnt
-  ps_mapdata->mapVersion = static_cast<uint8_t>(pmapdata->msgCnt);
-  ps_mapdata->id = 0;
-  // MapData__intersections *intersections (A_SEQUENCE_OF Intersecion_t) (one intersection per mapdata)
-  if (pmapdata->intersections)
-  {
-    if (pmapdata->intersections->list.count != 1)
-    {
-      SEQUENCE_free(&asn_DEF_MapData, pmapdata, 0);
-      return false;
-    }
-    Intersection_t* pIntersection = (Intersection_t*)(pmapdata->intersections->list.array[0]);
-    // Intersection::IntersectionID_t  id (OCTET_STRING_t)
-    ps_mapdata->id = (uint32_t)(uchar2ulong((u_char*)(pIntersection->id.buf),0,pIntersection->id.size));
-    // Intersection::Position3D *refPoint (Latitude_t long, Longitude_t long, Elevation_t* OCTET_STRING_t)
-    ps_mapdata->ref_latitude = 0;  
-    ps_mapdata->ref_longitude = 0;
-    ps_mapdata->ref_elevation = 0;
-    if (pIntersection->refPoint)
-    {
-      ps_mapdata->ref_latitude = (int32_t)(pIntersection->refPoint->lat);
-      ps_mapdata->ref_longitude = (int32_t)(pIntersection->refPoint->Long);
-      if (pIntersection->refPoint->elevation)
-      {
-        ps_mapdata->ref_elevation = (int32_t)((double)uchar2ulong((u_char*)(pIntersection->refPoint->elevation->buf),0,pIntersection->refPoint->elevation->size) * DsrcConstants::deca);
-      }
-    }
-    // Intersection::approaches
-    ps_mapdata->approachNums = 0;
-    for (int i=0;i<pIntersection->approaches.list.count;i++)
-    {
-      ApproachObject_t* pApproachObj = (ApproachObject_t*)(pIntersection->approaches.list.array[i]);
-      // Intersection::ApproachObject::*approach, *egress
-      if (pApproachObj->approach || pApproachObj->egress)
-      {
-        Approach_t* pApproach;
-        MsgEnum::map_enum_t::approachType type;
-        if (pApproachObj->approach)
-        {
-          pApproach = (Approach_t*)(pApproachObj->approach);
-          type = MsgEnum::map_enum_t::APPROACH;
-        }
-        else
-        {
-          pApproach = (Approach_t*)(pApproachObj->egress);
-          type = MsgEnum::map_enum_t::EGRESS;
-        }
-        //Approach::*drivingLanes
-        if (pApproach->drivingLanes)
-        {
-          ps_mapdata->approachNums++;
-          Approach_element_t* ps_appdata = &(ps_mapdata->approach[ps_mapdata->approachNums - 1]);
-          ps_appdata->type = type;
-          ps_appdata->laneNums = (uint8_t)(pApproach->drivingLanes->list.count);
-          for (int j=0;j<pApproach->drivingLanes->list.count;j++)
-          {
-            // drivingLanes::VehicleReferenceLane
-            VehicleReferenceLane_t* pVehRefLane = (VehicleReferenceLane_t*)(pApproach->drivingLanes->list.array[j]);
-            Lane_element_t* ps_lanedata = &(ps_appdata->lane[j]);
-            ps_lanedata->type = MsgEnum::map_enum_t::TRAFFICLANE;
-            // VehicleReferenceLane::laneNumber (OCTET_STRING_t)
-            ps_lanedata->id = (uint8_t)(uchar2ulong((u_char*)(pVehRefLane->laneNumber.buf),0,pVehRefLane->laneNumber.size));
-            // VehicleReferenceLane::*laneWidth (long)
-            ps_lanedata->width = static_cast<uint16_t>((pVehRefLane->laneWidth) ? (*(pVehRefLane->laneWidth)) : 0);
-            // VehicleReferenceLane::laneAttributes (long)
-            ps_lanedata->attributes = (uint16_t)(pVehRefLane->laneAttributes);
-            // VehicleReferenceLane::nodeList
-            ps_lanedata->nodeNums =(uint8_t)(pVehRefLane->nodeList.list.count);
-            for (int k=0;k<pVehRefLane->nodeList.list.count;k++)
-            {
-              // nodeList::Offsets_t (OCTET_STRING_t)
-              Offsets_t* pOffset = (Offsets_t*)(pVehRefLane->nodeList.list.array[k]);
-              Node_element_t* ps_nodedata = &(ps_lanedata->node[k]);
-              ps_nodedata->xOffset = (int16_t)(uchar2ulong((u_char*)(pOffset->buf),0,2));
-              ps_nodedata->yOffset = (int16_t)(uchar2ulong((u_char*)(pOffset->buf),2,2));
-            }
-            // VehicleReferenceLane::*connectsTo (OCTET_STRING_t)
-            ps_lanedata->conNums = static_cast<uint8_t>((pVehRefLane->connectsTo) ? ((pVehRefLane->connectsTo->size)/2) : 0);
-            if (ps_lanedata->conNums > 0)
-            {
-              for (uint8_t k=0;k<ps_lanedata->conNums;k++)
-              {
-                ps_lanedata->conn[k].laneId = pVehRefLane->connectsTo->buf[2*k];
-                ps_lanedata->conn[k].laneManeuver = (MsgEnum::map_enum_t::maneuverType)(pVehRefLane->connectsTo->buf[2*k+1]);
-              }
-            }
-          }
-        }
-        //Approach::*crosswalks
-        if(pApproach->crosswalks)
-        {
-          ps_mapdata->approachNums++;
-          Approach_element_t* ps_appdata = &(ps_mapdata->approach[ps_mapdata->approachNums - 1]);
-          ps_appdata->type = MsgEnum::map_enum_t::CROSSWALK;
-          ps_appdata->laneNums = (uint8_t)(pApproach->crosswalks->list.count);
-          for (int j=0;j<pApproach->crosswalks->list.count;j++)
-          {
-            // crosswalks::CrosswalkLane
-            CrosswalkLane_t* pCrosswalk = (CrosswalkLane_t*)(pApproach->crosswalks->list.array[j]);
-            Lane_element_t* ps_lanedata = &(ps_appdata->lane[j]);
-            ps_lanedata->type = MsgEnum::map_enum_t::CROSSWALKLANE;
-            // CrosswalkLane::laneNumber (OCTET_STRING_t)
-            ps_lanedata->id = (uint8_t)(uchar2ulong((u_char*)(pCrosswalk->laneNumber.buf),0,pCrosswalk->laneNumber.size));
-            // CrosswalkLane::*laneWidth (long)
-            ps_lanedata->width = static_cast<uint16_t>((pCrosswalk->laneWidth) ? (*(pCrosswalk->laneWidth)) : 0);
-            // CrosswalkLane::laneAttributes (ENUMERATED_t)
-            ps_lanedata->attributes = (uint16_t)(uchar2ulong((u_char*)(pCrosswalk->laneAttributes.buf),0,pCrosswalk->laneAttributes.size));
-            // CrosswalkLane::nodeList
-            ps_lanedata->nodeNums =(uint8_t)(pCrosswalk->nodeList.list.count);
-            for (int k=0;k<pCrosswalk->nodeList.list.count;k++)
-            {
-              // nodeList::Offsets_t (OCTET_STRING_t)
-              Offsets_t* pOffset = (Offsets_t*)(pCrosswalk->nodeList.list.array[k]);
-              Node_element_t* ps_nodedata = &(ps_lanedata->node[k]);
-              ps_nodedata->xOffset = (int16_t)(uchar2ulong((u_char*)(pOffset->buf),0,2));
-              ps_nodedata->yOffset = (int16_t)(uchar2ulong((u_char*)(pOffset->buf),2,2));
-            }
-            // CrosswalkLane::*connectsTo (OCTET_STRING_t)
-            ps_lanedata->conNums = static_cast<uint8_t>((pCrosswalk->connectsTo) ? ((pCrosswalk->connectsTo->size)/2) : 0);
-            if (ps_lanedata->conNums > 0)
-            {
-              for (uint8_t k=0;k<ps_lanedata->conNums;k++)
-              {
-                ps_lanedata->conn[k].laneId = pCrosswalk->connectsTo->buf[2*k];
-                ps_lanedata->conn[k].laneManeuver = (MsgEnum::map_enum_t::maneuverType)(pCrosswalk->connectsTo->buf[2*k+1]);
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  
-  // free pmapdata
-  SEQUENCE_free(&asn_DEF_MapData, pmapdata, 0);
-  return (true);
-}
-
-void AsnJ2735Lib::encode_mapdata_payload(void) const
-{
-  char buffer[MAXDSRCMSGSIZE];
-  ssize_t consumedBytes;
-  
-  for (size_t i = 0; i< mpMapData->mpIntersection.size(); i++)
-  {
-    consumedBytes = encode_mapdata_payload(mpMapData->mpIntersection[i].id, buffer, MAXDSRCMSGSIZE);
-    if (consumedBytes > 0)
-    {
-      mpMapData->mpIntersection[i].mapPayload.assign(buffer,(size_t)consumedBytes);
-    }
-  }
-}
-
-ssize_t AsnJ2735Lib::encode_mapdata_payload(const uint32_t intersectionId,char* ptr,size_t size) const
-{
-  asn_enc_rval_t  rval;  // Encoder return value
-
-  int index = mpMapData->getIndexByIntersectionId(intersectionId);
-  
-  if (index < 0)
-  {
-    // can't find intersectionId from MapDataStruct
-    return (-1);
-  }
-  
-  if (mpMapData->mpIntersection[index].mpApproaches.empty())
-  {
-    // nothing to encode
-    return (-1);
-  }
-  
-  MapData_t* pmapdata = (MapData_t *)calloc(1, sizeof(MapData_t));
-  // MapData::msgID (INTEGER_t)(size 1)
-  asn_long2INTEGER(&(pmapdata->msgID),DSRCmsgID_mapData);
-  // MapData::msgCnt (long) (0..127) (size 1) 
-  pmapdata->msgCnt = mpMapData->getMapVersion(intersectionId);  
-  // MapData::*name (OCTET_STRING_t) (size 1..63) (OPTIONAL)
-  // MapData::*layerType (INTEGER_t) (size 1) (OPTIONAL)
-  // MapData::LayerID_t *layerID (long) (0..100) (size 1) (OPTIONAL)
-  // MapData::*dataParameters (OPTIONAL)
-  // MapData::*intersections (size 1..32) (A_SEQUENCE_OF Intersection_t list) (one per Map)
-  pmapdata->intersections = (MapData::MapData__intersections*)calloc(1, sizeof(MapData::MapData__intersections)); 
-  
-  // MapData::*intersections::Intersection
-  Intersection_t* pIntersection = (Intersection_t *)calloc(1, sizeof(Intersection_t));
-  // fill Intersection
-  // Intersection::*name (OCTET_STRING_t) (size 1..63) (OPTIONAL)
-  // Intersection::id (OCTET_STRING_t) (size 2..4)  
-  int bytenum = byteNums(intersectionId);
-  uint32_t intId = (BigEndian)? intersectionId : (htonl(intersectionId) >> ((sizeof(uint32_t) - bytenum) * 8));  
-  OCTET_STRING_fromBuf(&(pIntersection->id),(char*)&intId,bytenum);
-  // Intersection::*refPoint (OPTIONAL) 
-  pIntersection->refPoint = (Position3D_t *)calloc(1, sizeof(Position3D_t));
-    // Intersection::*refPoint::lat (long)
-    pIntersection->refPoint->lat = mpMapData->mpIntersection[index].geoRef.latitude;
-    // Intersection::*refPoint::Long (long)
-    pIntersection->refPoint->Long = mpMapData->mpIntersection[index].geoRef.longitude;
-    // Intersection::*refPoint::*elevation (OCTET_STRING_t) (in decimetre) (size 2)
-    int16_t refElev = static_cast<int16_t>(DsrcConstants::deca2unit<int32_t>(mpMapData->mpIntersection[index].geoRef.elevation));
-    if (!BigEndian) {refElev = htons(refElev);}
-    pIntersection->refPoint->elevation = OCTET_STRING_new_fromBuf(&asn_DEF_Elevation,(char*)&refElev,2);
-  // Intersection::*refInterNum (OCTET_STRING_t) (size 2..4) (OPTIONAL)
-  // Intersection::*orientation (long) (OPTIONAL)
-  // Intersection::*laneWidth (long) (OPTIONAL) (laneWidth is provided by lane below)
-  // Intersection::*type (OCTET_STRING_t) (size 1) (OPTIONAL)
-  // Intersection::*preemptZones (A_SEQUENCE_OF SignalControlZone_t list) (size 1..32) (OPTIONAL)
-  // Intersection::*priorityZones (A_SEQUENCE_OF SignalControlZone_t list) (size 1..32) (OPTIONAL)
-  // Intersection::approaches (A_SEQUENCE_OF ApproachObject_t list) (size 1..32)  (each ApproachObject_t include one approach and one egress)
-  int approachObjNums = NEMAPHASES / 2;
-  for (int i = 0; i < approachObjNums; i++)
-  {
-    if (mpMapData->mpIntersection[index].mpApproaches[i*2].mpLanes.size() == 0 &&
-      mpMapData->mpIntersection[index].mpApproaches[i*2+1].mpLanes.size() == 0)
-    {
-      // empty ApproachObject_t
-      continue;
-    }
-    ApproachObject_t* pApproachObj = (ApproachObject_t *)calloc(1, sizeof(ApproachObject_t));
-    // ApproachObject::*refPoint (OPTIONAL) (Refer to MapData_t::intersections::*refPoint)
-    // ApproachObject::*laneWidth (long) (OPTIONAL) (Info include by lane below)
-    for (int j=0;j<2;j++)
-    {
-      if (mpMapData->mpIntersection[index].mpApproaches[i*2+j].mpLanes.size() > 0)
-      {
-        if (mpMapData->mpIntersection[index].mpApproaches[i*2+j].type == MsgEnum::map_enum_t::APPROACH)
-        {
-          // ApproachObject::*approach
-          pApproachObj->approach = (Approach_t *)calloc(1, sizeof(Approach_t));
-          // Approach::*name (OCTET_STRING_t) (OPTIONAL)
-          // Approach::*id (long) (0..127)(OPTIONAL)
-          // Approach::*computedLanes (OPTIONAL)
-          // Approach::*trainsAndBuses (OPTIONAL)
-          // Approach::*barriers (OPTIONAL)
-          // Approach::*drivingLanes (OPTIONAL)
-          addDrivingLanes2approachObj(pApproachObj->approach,index,i*2+j,true);
-          // Approach::*crosswalks (OPTIONAL)
-          if (mpMapData->mpIntersection[index].mpApproaches[i*2+j+NEMAPHASES-i].mpLanes.size() > 0)
-          {
-            int broadcastlanes = 0;
-            for (size_t k = 0; k < mpMapData->mpIntersection[index].mpApproaches[i*2+j+NEMAPHASES-i].mpLanes.size(); k++)
-            {
-              int broadcastpts = 0;
-              for (size_t ii = 0; ii < mpMapData->mpIntersection[index].mpApproaches[i*2+j+NEMAPHASES-i].mpLanes[k].mpNodes.size();ii++)
-              { 
-                if (mpMapData->mpIntersection[index].mpApproaches[i*2+j+NEMAPHASES-i].mpLanes[k].mpNodes[ii].isBroadcast)
-                {
-                  ++broadcastpts;
-                }
-              }
-              if (broadcastpts >= 2)
-              {
-                ++broadcastlanes;
-              }
-            }
-            if (broadcastlanes > 0)
-            {
-              addCrosswalk2approachObj(pApproachObj->approach,index,i*2+j+NEMAPHASES-i);
-            }
-          }
-        }
-        else if (mpMapData->mpIntersection[index].mpApproaches[i*2+j].type == MsgEnum::map_enum_t::EGRESS)
-        {
-          // ApproachObject::*egress
-          pApproachObj->egress = (Approach_t *)calloc(1, sizeof(Approach_t));
-          // Approach::*id (long) (0..127)(OPTIONAL)          
-          // Approach::*drivingLanes (OPTIONAL)
-          addDrivingLanes2approachObj(pApproachObj->egress,index,i*2+j,false);
-          // Approach::*crosswalks (OPTIONAL) (added in approach)
-        }
-      }
-    }
-    
-    // add ApproachObject to Intersection::approaches
-    asn_sequence_add(&(pIntersection->approaches), pApproachObj);
-  }
-  // add Intersection to MapData
-  asn_sequence_add(pmapdata->intersections, pIntersection);   
-  
-  // MapData::crc (OCTET_STRING_t) (size 2) (created with the CRC-CCITT polynomial(KERMIT))
-  uint16_t crc = crc16((char *)pmapdata, sizeof(*pmapdata));
-  if (!BigEndian) {crc = htons(crc);}
-  OCTET_STRING_fromBuf(&(pmapdata->crc),(char*)&crc,2);
-  
-  // encode mapdata
-  rval = der_encode_to_buffer(&asn_DEF_MapData, pmapdata, ptr, size);
-
-  // free pmapdata
-  SEQUENCE_free(&asn_DEF_MapData, pmapdata, 0);
-    
-  return (rval.encoded);  
-}
-
-void AsnJ2735Lib::addDrivingLanes2approachObj(struct Approach* pApproach,const int index,const int approachIndex,const bool isIngress) const
-{ 
-  char buffer[20];
-  int offset = 0;
-  int16_t d_eOffset,d_nOffset;
-  int32_t offsets;
-  int prevNodeIndex;
-  
-  pApproach->drivingLanes = (Approach::Approach__drivingLanes *)calloc(1, sizeof(Approach::Approach__drivingLanes));  
-  for (size_t j=0; j < mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes.size(); j++)
-  {
-    VehicleReferenceLane_t* pDrivingLane = (VehicleReferenceLane_t *)calloc(1, sizeof(VehicleReferenceLane_t)); 
-    // *drivingLanes::laneNumber (OCTET_STRING_t) (size 1)
-    OCTET_STRING_fromBuf(&(pDrivingLane->laneNumber),(char*)&(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].id),1);
-    // *drivingLanes::*laneWidth (long) (0..32767)(units of 1 cm) (OPTIONAL)
-    pDrivingLane->laneWidth = (LaneWidth_t *)calloc(1, sizeof(LaneWidth_t));
-    *(pDrivingLane->laneWidth) = mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].width;
-    // *drivingLanes::laneAttributes (long)
-      /* nmap lane attributes bit map (bit on)              DSRC DE_VehicleLaneAttributes      
-       *                                                    noLaneData  
-       *  0 (LSB) Lane provides a two-way travel            egressPath
-       *  1 Straight maneuver permitted                     maneuverStraightAllowed
-       *  2 Left turn maneuver permitted                    maneuverLeftAllowed
-       *  3 Right turn maneuver permitted                   maneuverRightAllowed
-       *  4 Yield                                           yield
-       *  5 No U-turn                                       maneuverNoUTurn
-       *  6 No turn on red                                  maneuverNoTurnOnRed
-       *  7 No stopping                                     maneuverNoStop
-       *  8 HOV lane                                        noStop
-       *  9 Bus only lane                                   noTurnOnRed
-       * 10 Bus and taxi only lane                          hovLane
-       * 11 Shared two-way left turn lane                   busOnly
-       * 12 Bike lane                                       busAndTaxiOnly
-       * 13 Reserved                                        maneuverHOVLane
-       * 14 Reserved                                        maneuverSharedLane
-       * 15                                                 maneuverBikeLane
-       * (LSB) 8 bits are the same and nmap lane attributes do not use the high 8 bits 
-      */
-    pDrivingLane->laneAttributes = static_cast<VehicleLaneAttributes_t>(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].attributes.to_ulong());
-    // *drivingLanes::*keepOutList  (OPTIONAL)        
-    // *drivingLanes::nodeList (size 1..64)
-    prevNodeIndex = -1;
-    for (size_t k = 0; k < mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes.size(); k++)
-    {
-      // *drivingLanes::nodeList::Offsets_t (size 4..8)
-      // OCTET_STRING_t, Made up of SEQUENCE {  
-      //    -- xOffset  INTEGER (-32767..32767), (size 2)
-      //    -- yOffset  INTEGER (-32767..32767), (size 2)
-      //    -- if 6 or 8 bytes in length:
-      //    -- zOffset  INTEGER (-32767..32767) OPTIONAL, (size 2)
-      //    -- all above in signed values where the LSB is in units of 1.0 cm   
-      //    -- if 8 bytes in length:
-      //    -- width    LaneWidth  OPTIONAL (size 2)
-      //    -- a length of 7 bytes is never used        
-      if (!mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[k].isBroadcast)
-        continue;
-      if (prevNodeIndex < 0)
-      {
-        d_eOffset = static_cast<int16_t>(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[k].ptNode.x);
-        d_nOffset = static_cast<int16_t>(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[k].ptNode.y);
-      }
-      else
-      {
-        d_eOffset = static_cast<int16_t>(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[k].ptNode.x
-          - mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[prevNodeIndex].ptNode.x);
-        d_nOffset = static_cast<int16_t>(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[k].ptNode.y
-          - mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[prevNodeIndex].ptNode.y);
-      }
-      prevNodeIndex = static_cast<int>(k);      
-      offsets = ((d_eOffset << 16) + d_nOffset);
-      if (!BigEndian) {offsets = htonl(offsets);}
-      Offsets_t* pOffset = OCTET_STRING_new_fromBuf(&asn_DEF_Offsets,(char*)&offsets,4);      
-      // add Offsets to *drivingLanes
-      asn_sequence_add(&(pDrivingLane->nodeList), pOffset);
-    }
-
-    // ConnectsTo_t *connectsTo (OCTET_STRING_t) (list of pair bytes, connectToLandId & connectToManuver)
-    if (isIngress && !(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpConnectTo.empty()))
-    {
-      offset = 0;
-      for (size_t k = 0; k < mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpConnectTo.size(); k++)
-      {
-        buffer[offset] = mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpConnectTo[k].laneId;
-        offset++;
-        buffer[offset] = mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpConnectTo[k].laneManeuver;
-        offset++;
-      }
-      pDrivingLane->connectsTo = OCTET_STRING_new_fromBuf(&asn_DEF_OCTET_STRING,buffer,offset);
-    }
-    
-    // add *drivingLanes to Approach
-    asn_sequence_add(pApproach->drivingLanes, pDrivingLane);
-  }
-}
-
-void AsnJ2735Lib::addCrosswalk2approachObj(struct Approach* pApproach,const int index,const int approachIndex) const
-{ 
-  int16_t d_eOffset,d_nOffset;
-  int32_t offset;
-  int prevNodeIndex;
-  
-  pApproach->crosswalks = (Approach::Approach__crosswalks *)calloc(1, sizeof(Approach::Approach__crosswalks));  
-  for (size_t j=0; j < mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes.size(); j++)
-  {
-    CrosswalkLane_t* pCrossWalk = (CrosswalkLane_t *)calloc(1, sizeof(CrosswalkLane_t));  
-    // *crosswalks::laneNumber (OCTET_STRING_t) (size 1)
-    OCTET_STRING_fromBuf(&(pCrossWalk->laneNumber),(char*)&(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].id),1);
-    // *crosswalks::*laneWidth (long) (0..32767)(units of 1 cm) (OPTIONAL)
-    pCrossWalk->laneWidth = (LaneWidth_t *)calloc(1, sizeof(LaneWidth_t));  
-    *(pCrossWalk->laneWidth) = mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].width;
-    // *crosswalks::laneAttributes (INTEGER_t)
-    asn_long2INTEGER(&(pCrossWalk->laneAttributes),static_cast<long>(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].attributes.to_ulong()));
-    // *crosswalks::*keepOutList  (OPTIONAL)        
-    // *crosswalks::nodeList (size 1..64)
-    prevNodeIndex = -1;   
-    for (size_t k = 0; k < mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes.size(); k++)
-    {
-      // *crosswalks::nodeList::Offsets_t (size 4..8)
-      // OCTET_STRING_t, Made up of SEQUENCE {  
-      //    -- xOffset  INTEGER (-32767..32767), (size 2)
-      //    -- yOffset  INTEGER (-32767..32767), (size 2)
-      //    -- if 6 or 8 bytes in length:
-      //    -- zOffset  INTEGER (-32767..32767) OPTIONAL, (size 2)
-      //    -- all above in signed values where the LSB is in units of 1.0 cm   
-      //    -- if 8 bytes in length:
-      //    -- width    LaneWidth  OPTIONAL (size 2)
-      //    -- a length of 7 bytes is never used      
-      if (!mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[k].isBroadcast)
-        continue;
-      if (prevNodeIndex < 0)
-      {
-        d_eOffset = static_cast<int16_t>(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[k].ptNode.x);
-        d_nOffset = static_cast<int16_t>(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[k].ptNode.y);
-      }
-      else
-      {
-        d_eOffset = static_cast<int16_t>(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[k].ptNode.x
-          - mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[prevNodeIndex].ptNode.x);
-        d_nOffset = static_cast<int16_t>(mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[k].ptNode.y
-          - mpMapData->mpIntersection[index].mpApproaches[approachIndex].mpLanes[j].mpNodes[prevNodeIndex].ptNode.y);
-      }
-      prevNodeIndex = static_cast<int>(k);      
-      offset = ((d_eOffset << 16) + d_nOffset);
-      if (!BigEndian) {offset = htonl(offset);}
-      Offsets_t* pOffset = OCTET_STRING_new_fromBuf(&asn_DEF_Offsets,(char*)&offset,4);
-      
-      // add Offsets to CrosswalkLane
-      asn_sequence_add(&(pCrossWalk->nodeList), pOffset);
-    }   
-    // add CrosswalkLane to Approach
-    asn_sequence_add(pApproach->crosswalks, pCrossWalk);
-  }
-}
-
-ssize_t AsnJ2735Lib::encode_srm_payload(const SRM_element_t* ps_srm,char* ptr,const size_t size,bool withHeader) const
-{
-  asn_enc_rval_t  rval;   // Encoder return value 
-  
-  SignalRequestMsg_t* psrm = (SignalRequestMsg_t *)calloc(1,sizeof(SignalRequestMsg_t)); 
-  // SignalRequestMsg::msgID (INTEGER_t) (size 1)
-  asn_long2INTEGER(&(psrm->msgID),DSRCmsgID_signalRequestMessage);
-  // SignalRequestMsg::msgCnt (long) (size 1)
-  psrm->msgCnt = ps_srm->msgCnt;
-  // SignalRequestMsg::request
-  //  request::id
-  int bytenum = byteNums(ps_srm->signalRequest_element.id);
-  uint32_t intId = (BigEndian)? ps_srm->signalRequest_element.id : (htonl(ps_srm->signalRequest_element.id) >> ((sizeof(uint32_t) - bytenum) * 8));
-  OCTET_STRING_fromBuf(&(psrm->request.id),(char*)&intId,bytenum);
-  //  request::*requestedAction OCTET_STRING_t
-  if (ps_srm->signalRequest_element.requestedAction == MsgEnum::priorityrequest_enum_t::CANCELPRIORITY 
-    || ps_srm->signalRequest_element.requestedAction == MsgEnum::priorityrequest_enum_t::CANCELPREEMP)
-  {
-    psrm->request.isCancel = OCTET_STRING_new_fromBuf(&asn_DEF_OCTET_STRING,(const char*)(&(ps_srm->signalRequest_element.requestedAction)),1);
-  }
-  else if (ps_srm->signalRequest_element.requestedAction == MsgEnum::priorityrequest_enum_t::REQUESTPRIORITY 
-    || ps_srm->signalRequest_element.requestedAction == MsgEnum::priorityrequest_enum_t::REQUESTPREEMP)
-  {
-    psrm->request.requestedAction = OCTET_STRING_new_fromBuf(&asn_DEF_OCTET_STRING,(const char*)(&(ps_srm->signalRequest_element.requestedAction)),1);  
-  }
-  //  request::*inLane 
-  psrm->request.inLane = OCTET_STRING_new_fromBuf(&asn_DEF_OCTET_STRING,(const char*)(&(ps_srm->signalRequest_element.inLaneId)),1);
-  //  request::*outLane 
-  psrm->request.outLane = OCTET_STRING_new_fromBuf(&asn_DEF_OCTET_STRING,(const char*)(&(ps_srm->signalRequest_element.outLaneId)),1);
-  //  request::type (NTCIPVehicleclass_t OCTET_STRING)
-  uint8_t type = static_cast<uint8_t>(((ps_srm->signalRequest_element.NTCIPVehicleclass.NTCIPvehicleClass_type << 4) 
-    + (ps_srm->signalRequest_element.NTCIPVehicleclass.NTCIPvehicleClass_level)) & 0xFF);
-  OCTET_STRING_fromBuf(&(psrm->request.type),(char*)&type,1);
-  //  request::*codeWord
-  psrm->request.codeWord = OCTET_STRING_new_fromBuf(&asn_DEF_OCTET_STRING,ps_srm->signalRequest_element.codeWord,(int)strlen(ps_srm->signalRequest_element.codeWord));
-  if (ps_srm->signalRequest_element.requestedAction == MsgEnum::priorityrequest_enum_t::REQUESTPRIORITY 
-    || ps_srm->signalRequest_element.requestedAction == MsgEnum::priorityrequest_enum_t::REQUESTPREEMP)
-  {
-    /// including timeOfService & endOfService for priority request only, no need for cancel request
-    // SignalRequestMsg::*timeOfService
-    psrm->timeOfService = (DTime_t *)calloc(1,sizeof(DTime_t));
-    psrm->timeOfService->hour = (DHour_t)ps_srm->timeOfService.hour;
-    psrm->timeOfService->minute = (DMinute_t)ps_srm->timeOfService.min;
-    psrm->timeOfService->second = (DSecond_t)ps_srm->timeOfService.sec;
-    // SignalRequestMsg::*endOfService
-    psrm->endOfService = (DTime_t *)calloc(1,sizeof(DTime_t));
-    psrm->endOfService->hour = (DHour_t)ps_srm->endOfService.hour;
-    psrm->endOfService->minute = (DMinute_t)ps_srm->endOfService.min;
-    psrm->endOfService->second = (DSecond_t)ps_srm->endOfService.sec;
-  }
-  // SignalRequestMsg::*transitStatus 
-  psrm->transitStatus = (TransitStatus_t *)calloc(1,sizeof(TransitStatus_t));
-  psrm->transitStatus->buf = (uint8_t *)calloc(1,1);  
-  psrm->transitStatus->size = 1;
-  psrm->transitStatus->buf[0] = ps_srm->transitStatus;
-  psrm->transitStatus->bits_unused = 2;
-  // SignalRequestMsg::*vehicleVIN
-  psrm->vehicleVIN = (VehicleIdent_t *)calloc(1,sizeof(VehicleIdent_t));
-  //  vehicleVIN::*name
-  psrm->vehicleVIN->name = OCTET_STRING_new_fromBuf(&asn_DEF_OCTET_STRING,ps_srm->vehIdent_element.vehName,(int)strlen(ps_srm->vehIdent_element.vehName));
-  //  vehicleVIN::*vin
-  psrm->vehicleVIN->vin = OCTET_STRING_new_fromBuf(&asn_DEF_OCTET_STRING,ps_srm->vehIdent_element.vehVin,(int)strlen(ps_srm->vehIdent_element.vehVin));
-  //  vehicleVIN::*ownerCode
-  psrm->vehicleVIN->ownerCode = OCTET_STRING_new_fromBuf(&asn_DEF_OCTET_STRING,ps_srm->vehIdent_element.vehOwnerCode,(int)strlen(ps_srm->vehIdent_element.vehOwnerCode));
-  //  vehicleVIN::*id
-  uint32_t vid = (BigEndian)? ps_srm->vehIdent_element.vehId : htonl(ps_srm->vehIdent_element.vehId);
-  psrm->vehicleVIN->id = OCTET_STRING_new_fromBuf(&asn_DEF_OCTET_STRING,(char*)&vid,4);
-  //  vehicleVIN::*vehicleType (VehicleType_t ENUMERATED_t INTEGER_t)
-  asn_long2INTEGER(psrm->vehicleVIN->vehicleType,ps_srm->vehIdent_element.vehType);
-  //  vehicleVIN::*vehicleClass
-  // SignalRequestMsg::vehicleData
-  OCTET_STRING_fromBuf(&(psrm->vehicleData),ps_srm->BSMblob,BSMBLOB1SIZE);
-  // SignalRequestMsg::*status
-  psrm->status = OCTET_STRING_new_fromBuf(&asn_DEF_OCTET_STRING,(const char*)&(ps_srm->requestStatus),1); 
-  
-  // encode SRM
-  rval = der_encode_to_buffer(&asn_DEF_SignalRequestMsg, psrm, ptr, size);
-  
-  // free psrm
-  SEQUENCE_free(&asn_DEF_SignalRequestMsg, psrm, 0);
-  
-  if (withHeader)
-  {
-    MsgEnum::msg_enum_t::MSGTYPE msgtype = MsgEnum::msg_enum_t::SRM_PKT;  
-    string str = wmeUtils::fillAradaUdp(msgtype,ptr,rval.encoded);
-    memcpy(ptr,str.c_str(),str.size() + 1);
-    return (str.size() + 1);
-  }
-  else
-  {
-    return (rval.encoded);  
-  }
-}
-
-ssize_t AsnJ2735Lib::encode_ssm_payload(const SSM_element_t* ps_ssm,char* ptr,const size_t size,bool withHeader) const
-{
-  ssize_t offset = 0;
-  ptr[offset] = 0x30;     // indication of start of payload
-  offset++;
-  ptr[offset] = wmeUtils::DSRCmsgID_SSM;    //msgID
-  offset++;
-  ptr[offset] = ps_ssm->msgCnt;
-  offset++;
-  uint32_t id = (BigEndian)? ps_ssm->id : htonl(ps_ssm->id);
-  memcpy(ptr+offset,&id,4);
-  offset += 4;
-  ptr[offset] = ps_ssm->status;
-  offset++;
-  uint16_t ms = (BigEndian)? ps_ssm->ms : htons(ps_ssm->ms);
-  memcpy(ptr+offset,&ms,2);
-  offset += 2;
-  id = (BigEndian)? ps_ssm->priorityCause : htonl(ps_ssm->priorityCause);
-  memcpy(ptr+offset,&id,4);
-  offset += 4;
-  ptr[offset] = ps_ssm->requestNums;
-  offset++;
-  if (sizeof(ps_ssm->requestNums) * ps_ssm->requestNums + offset >= size)
-    return (-1);
-  for (uint8_t i=0; i< ps_ssm->requestNums; i++)
-  {
-    id = (BigEndian)? ps_ssm->request[i].id : htonl(ps_ssm->request[i].id);
-    memcpy(ptr+offset,&id,4);
-    offset += 4;
-    ptr[offset] = ps_ssm->request[i].inLaneId;
-    offset++;
-    ptr[offset] = ps_ssm->request[i].outLaneId;
-    offset++;
-    ptr[offset] = ps_ssm->request[i].contolPhase;
-    offset++;   
-    ptr[offset] = ps_ssm->request[i].classType;
-    offset++;
-    ptr[offset] = ps_ssm->request[i].classLevel;
-    offset++;
-    ptr[offset] = ps_ssm->request[i].requestStatus;
-    offset++;   
-    ptr[offset] = ps_ssm->request[i].transitStatus;
-    offset++;
-    ptr[offset] = ps_ssm->request[i].timeOfService.hour;
-    offset++;
-    ptr[offset] = ps_ssm->request[i].timeOfService.min;
-    offset++;
-    ms = (BigEndian)? ps_ssm->request[i].timeOfService.sec : htons(ps_ssm->request[i].timeOfService.sec);
-    memcpy(ptr+offset,&ms,2);
-    offset += 2;
-    ptr[offset] = ps_ssm->request[i].endOfService.hour;
-    offset++;
-    ptr[offset] = ps_ssm->request[i].endOfService.min;
-    offset++;
-    ms = (BigEndian)? ps_ssm->request[i].endOfService.sec : htons(ps_ssm->request[i].endOfService.sec);
-    memcpy(ptr+offset,&ms,2);
-    offset += 2;
-    ms = (BigEndian)? ps_ssm->request[i].etaOffset : htons(ps_ssm->request[i].etaOffset);    
-    memcpy(ptr+offset,&ms,2);
-    offset += 2;
-  }
-  if (withHeader)
-  {
-    MsgEnum::msg_enum_t::MSGTYPE msgtype = MsgEnum::msg_enum_t::SSM_PKT;  
-    string str = wmeUtils::fillAradaUdp(msgtype,ptr,static_cast<size_t>(offset));
-    memcpy(ptr,str.c_str(),str.size() + 1);
-    return (str.size() + 1);
-  }
-  else
-  {
-    return (offset);  
-  }
-}
-
-bool AsnJ2735Lib::decode_srm_payload(const char* ptr,const size_t size,SRM_element_t* ps_srm,FILE *fp) const
-{
-  asn_dec_rval_t rval;  
-  SignalRequestMsg_t* psrm = 0;
-  memset(ps_srm,0,sizeof(SRM_element_t));
-  ps_srm->reset();
-  
-  rval = ber_decode(0, &asn_DEF_SignalRequestMsg,(void **)&psrm, ptr, size);
-  if (rval.code != RC_OK)
-  {
-    SEQUENCE_free(&asn_DEF_SignalRequestMsg, psrm, 0);
-    return false;
-  }
-  
-  if (fp)
-  {
-    xer_fprint(fp, &asn_DEF_SignalRequestMsg, psrm);  
-  }
-    
-  // SignalRequestMsg::msgID (INTEGER_t) (size 1)
-  if (psrm->msgID.buf[0] != DSRCmsgID_signalRequestMessage)
-  {
-    SEQUENCE_free(&asn_DEF_SignalRequestMsg, psrm, 0);
-    return false;
-  }
-  // SignalRequestMsg::msgCnt (long) (size 1)
-  ps_srm->msgCnt = static_cast<uint8_t>(psrm->msgCnt);
-  // SignalRequestMsg::request::id
-  ps_srm->signalRequest_element.id = (uint32_t)(uchar2ulong((u_char*)(psrm->request.id.buf),0,psrm->request.id.size));
-  //  request::*requestedAction OCTET_STRING_t  
-  ps_srm->signalRequest_element.requestedAction = MsgEnum::priorityrequest_enum_t::UNKNOWREQUEST;
-  if (psrm->request.isCancel)
-  {
-    ps_srm->signalRequest_element.requestedAction = static_cast<uint8_t>(uchar2ulong((u_char*)(psrm->request.isCancel->buf),0,psrm->request.isCancel->size));
-  }
-  else if (psrm->request.requestedAction)
-  {
-    ps_srm->signalRequest_element.requestedAction = static_cast<uint8_t>(uchar2ulong((u_char*)(psrm->request.requestedAction->buf),0,psrm->request.requestedAction->size));
-  }
-  //  request::*inLane  
-  ps_srm->signalRequest_element.inLaneId = 0;
-  if (psrm->request.inLane)
-  {
-    ps_srm->signalRequest_element.inLaneId = static_cast<uint8_t>(uchar2ulong((u_char*)(psrm->request.inLane->buf),0,psrm->request.inLane->size));
-  }
-  //  request::*outLane   
-  ps_srm->signalRequest_element.outLaneId = 0;
-  if (psrm->request.outLane)
-  {
-    ps_srm->signalRequest_element.outLaneId = static_cast<uint8_t>(uchar2ulong((u_char*)(psrm->request.outLane->buf),0,psrm->request.outLane->size));
-  }
-  //  request::type (NTCIPVehicleclass_t OCTET_STRING)  
-  uint8_t vehClass = static_cast<uint8_t>(uchar2ulong((u_char*)(psrm->request.type.buf),0,psrm->request.type.size));
-  ps_srm->signalRequest_element.NTCIPVehicleclass.NTCIPvehicleClass_type = ((vehClass >> 4) & 0x0F);
-  ps_srm->signalRequest_element.NTCIPVehicleclass.NTCIPvehicleClass_level = (vehClass & 0x0F);
-  //  request::*codeWord
-  memset(ps_srm->signalRequest_element.codeWord,'\0',sizeof(ps_srm->signalRequest_element.codeWord));
-  if (psrm->request.codeWord)
-  {
-    memcpy(ps_srm->signalRequest_element.codeWord,(char*)psrm->request.codeWord->buf,psrm->request.codeWord->size);
-  }
-  // SignalRequestMsg::*timeOfService
-  memset(&(ps_srm->timeOfService),0,sizeof(ps_srm->timeOfService));
-  if (psrm->timeOfService)
-  {
-    ps_srm->timeOfService.hour = static_cast<uint8_t>(psrm->timeOfService->hour);
-    ps_srm->timeOfService.min = static_cast<uint8_t>(psrm->timeOfService->minute);
-    ps_srm->timeOfService.sec = static_cast<uint16_t>(psrm->timeOfService->second);
-  }
-  // SignalRequestMsg::*endOfService
-  memset(&(ps_srm->endOfService),0,sizeof(ps_srm->endOfService));
-  if (psrm->endOfService)
-  {
-    ps_srm->endOfService.hour = static_cast<uint8_t>(psrm->endOfService->hour);
-    ps_srm->endOfService.min = static_cast<uint8_t>(psrm->endOfService->minute);
-    ps_srm->endOfService.sec = static_cast<uint16_t>(psrm->endOfService->second);
-  }
-  // SignalRequestMsg::*transitStatus 
-  ps_srm->transitStatus = 0;
-  if (psrm->transitStatus)
-  {
-    ps_srm->transitStatus = psrm->transitStatus->buf[0];
-  }
-  // SignalRequestMsg::*vehicleVIN
-  memset(ps_srm->vehIdent_element.vehName,'\0',sizeof(ps_srm->vehIdent_element.vehName));
-  memset(ps_srm->vehIdent_element.vehVin,'\0',sizeof(ps_srm->vehIdent_element.vehVin));
-  memset(ps_srm->vehIdent_element.vehOwnerCode,'\0',sizeof(ps_srm->vehIdent_element.vehOwnerCode));
-  ps_srm->vehIdent_element.vehId = 0;
-  ps_srm->vehIdent_element.vehType = 0;
-  if (psrm->vehicleVIN)
-  { 
-    //  vehicleVIN::*name
-    if (psrm->vehicleVIN->name)
-    {
-      memcpy(ps_srm->vehIdent_element.vehName,psrm->vehicleVIN->name->buf,psrm->vehicleVIN->name->size);
-    }
-    //  vehicleVIN::*vin
-    if (psrm->vehicleVIN->vin)
-    {
-      memcpy(ps_srm->vehIdent_element.vehVin,psrm->vehicleVIN->vin->buf,psrm->vehicleVIN->vin->size);
-    }
-    //  vehicleVIN::*ownerCode
-    if (psrm->vehicleVIN->ownerCode)
-    {
-      memcpy(ps_srm->vehIdent_element.vehOwnerCode,psrm->vehicleVIN->ownerCode->buf,psrm->vehicleVIN->ownerCode->size);
-    }   
-    //  vehicleVIN::*id
-    if (psrm->vehicleVIN->id)
-    {
-      ps_srm->vehIdent_element.vehId = (uint32_t)(uchar2ulong((u_char*)(psrm->vehicleVIN->id->buf),0,psrm->vehicleVIN->id->size));
-    }
-    //  vehicleVIN::*vehicleType (VehicleType_t ENUMERATED_t INTEGER_t)
-    if (psrm->vehicleVIN->vehicleType)
-    {
-      ps_srm->vehIdent_element.vehType = psrm->vehicleVIN->vehicleType->buf[0];
-    }
-    //  vehicleVIN::*vehicleClass
-  }
-  // SignalRequestMsg::vehicleData
-  memcpy(ps_srm->BSMblob,(char*)psrm->vehicleData.buf,BSMBLOB1SIZE);
-  // SignalRequestMsg::*status
-  ps_srm->requestStatus = 0;
-  if (psrm->status)
-  {
-    ps_srm->requestStatus = psrm->status->buf[0];
-  }
-    
-  // free psrm
-  SEQUENCE_free(&asn_DEF_SignalRequestMsg, psrm, 0);
-  return true;
-}
-
-bool AsnJ2735Lib::decode_ssm_payload(const char* ptr,const size_t size,SSM_element_t* ps_ssm) const
-{
-  memset(ps_ssm,0,sizeof(SSM_element_t));
-  size_t offset = 1;  // first byte is 0x30
-  if (ptr[offset] != (char)wmeUtils::DSRCmsgID_SSM)
-    return false;
-  offset++;
-  ps_ssm->msgCnt = ptr[offset];
-  offset++;
-  uint32_t id;
-  memcpy(&id,ptr+offset,4);
-  ps_ssm->id = (BigEndian)? id : ntohl(id);
-  offset += 4;
-  ps_ssm->status = ptr[offset];
-  offset++;
-  uint16_t ms;
-  memcpy(&ms,ptr+offset,2);
-  ps_ssm->ms = (uint16_t)((BigEndian)? ms : ntohs(ms));
-  offset += 2;
-  memcpy(&id,ptr+offset,4);
-  ps_ssm->priorityCause = (BigEndian)? id : ntohl(id);
-  offset += 4;  
-  ps_ssm->requestNums = ptr[offset];
-  offset++;
-  if (ps_ssm->requestNums * sizeof(SSM_request_t) + offset >= size)
-    return false;
-  for (uint8_t i = 0; i < ps_ssm->requestNums; i++)
-  {
-    memcpy(&id,ptr+offset,4);
-    ps_ssm->request[i].id = (BigEndian)? id : ntohl(id);
-    offset += 4;
-    ps_ssm->request[i].inLaneId = ptr[offset];
-    offset++;
-    ps_ssm->request[i].outLaneId = ptr[offset];
-    offset++;
-    ps_ssm->request[i].contolPhase = ptr[offset];
-    offset++;   
-    ps_ssm->request[i].classType = ptr[offset];
-    offset++;
-    ps_ssm->request[i].classLevel = ptr[offset];
-    offset++;
-    ps_ssm->request[i].requestStatus = ptr[offset];
-    offset++;   
-    ps_ssm->request[i].transitStatus = ptr[offset];
-    offset++;
-    ps_ssm->request[i].timeOfService.hour = ptr[offset];
-    offset++;
-    ps_ssm->request[i].timeOfService.min = ptr[offset];
-    offset++;
-    memcpy(&ms,ptr+offset,2);
-    ps_ssm->request[i].timeOfService.sec = (uint16_t)(BigEndian)? ms : ntohs(ms);
-    offset += 2;
-    ps_ssm->request[i].endOfService.hour = ptr[offset];
-    offset++;
-    ps_ssm->request[i].endOfService.min = ptr[offset];
-    offset++;
-    memcpy(&ms,ptr+offset,2);
-    ps_ssm->request[i].endOfService.sec = (uint16_t)(BigEndian)? ms : ntohs(ms); 
-    offset += 2;
-    memcpy(&ms,ptr+offset,2);
-    ps_ssm->request[i].etaOffset = (uint16_t)(BigEndian)? ms : ntohs(ms);
-    offset += 2;
-  }
-  return true;
-}
-
-void AsnJ2735Lib::mapPayloadHex_fprintf(FILE *fp) const
-{
-  for (size_t i = 0; i< mpMapData->mpIntersection.size(); i++)
-  {
-    mapPayloadHex_fprintf(mpMapData->mpIntersection[i].id,fp);
-  }
-}
-
-void AsnJ2735Lib::mapPayloadHex_fprintf(const uint32_t intersectionId,FILE* fp) const
-{
-  int index = mpMapData->getIndexByIntersectionId(intersectionId);
-  fprintf(fp,"MAP_Name\t%s :: %zu bytes\n",mpMapData->mpIntersection[index].name.c_str(),
-    mpMapData->mpIntersection[index].mapPayload.size());
-  payloadHex_fprintf(mpMapData->mpIntersection[index].mapPayload.c_str(),
-    mpMapData->mpIntersection[index].mapPayload.size(),fp);
-}
-
-void AsnJ2735Lib::payloadHex_fprintf(const char *ptr,size_t size,FILE* fp) const
-{
-  for (size_t i = 0; i<size; i++)
-  {
-    fprintf(fp,"%02x", (ptr[i] & 0xff));
-  }
-  fprintf(fp,"\n");
-}
-

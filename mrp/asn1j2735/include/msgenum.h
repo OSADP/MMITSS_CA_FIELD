@@ -7,33 +7,41 @@
 #ifndef _DSRCMSGENUM_H
 #define _DSRCMSGENUM_H
 
+#include <cstdint>
+
 namespace MsgEnum
 {
-  struct msg_enum_t
-  {
-    enum MSGTYPE {UNKNOWN_PKT = 0,BSM_PKT = 1,SPAT_PKT = 2,MAP_PKT = 3,SRM_PKT = 4,SSM_PKT = 5};
-  };
-  struct map_enum_t
-  {
-    enum approachType { APPROACH = 1, EGRESS, BARRIER, CROSSWALK };
-    enum laneType {TRAFFICLANE = 1,CROSSWALKLANE = 4};    
-    enum maneuverType { UNKNOWN = 0, UTURN = 1, LEFTTURN, RIGHTTURN, STRAIGHTAHEAD, STRAIGHT };    
-  };
-  struct phasestate_enum_t
-  { 
-    enum vehicular {UNKNOWN, GREEN, YELLOW, RED, FLASHING};
-    enum pedestrian {UNAVAILABLE, STOP, CAUTION, WALK};
-    enum confidentce {UNKNOWN_ESTIMATE, MINTIME, MAXTIME, TIME_LIKELY_TO_CHANGE};
-  };    
-  struct priorityrequest_enum_t
-  {
-    enum vehicularrequest {CANCELPRIORITY = 0x00, REQUESTPRIORITY = 0x10, CANCELPREEMP = 0x80, REQUESTPREEMP = 0x90,UNKNOWREQUEST = 0xF0};
-    enum requeststatus  {NOTVALID,REJECTED,NOTNEEDED,QUEUED,ACTIVE,CANCELLED,COMPLETED};
-  };
-  /* NTCIP priorityRequestStatusInPRS OBJECT-TYPE SYNTAX INTEGER 
-      idleNotValid (1), readyQueued (2), readyOverridden (3), activeProcessing (4), activeCancel (5),
-      activeOverride (6), activeNotOverridden (7), closedCanceled (8), ReserviceError (9), closedTimeToLiveError (10),
-      closedTimerError (11), closedStrategyError (12), closedCompleted (13), activeAdjustNotNeeded (14), closedFlash (15) */  
+	static const uint8_t patternFlashing = 0xFE;
+	static const uint8_t patternFree = 0xFF;
+	static const unsigned long long mapInterval = 1000;  /// in milliseconds
+	static const unsigned long long ssmInterval = 1000;  /// in milliseconds
+	static const uint32_t invalid_timeStampMinute = 527040;
+	static const int32_t  unknown_elevation = -4096;
+	static const uint16_t unknown_timeDetail = 36001;
+	static const uint16_t unknown_speed = 8191;
+
+	enum class approachType    : uint8_t {inbound = 1, outbound, crosswalk = 4};
+	enum class laneType        : uint8_t {traffic = 1, crosswalk = 4};
+	enum class maneuverType    : uint8_t {unavailable, uTurn, leftTurn, rightTurn, straightAhead, straight};
+	enum class polygonType     : uint8_t {colinear, concave, convex};
+	enum class phaseState      : uint8_t {unavailable, dark, flashingRed, redLight, preMovement,
+			permissiveGreen, protectedGreen, permissiveYellow, protectedYellow, flashingYellow};
+	enum class requestType     : uint8_t {reserved, priorityRequest, requestUpdate, priorityCancellation};
+	enum class requestStatus   : uint8_t {unavailable, requested, processing, watchOtherTraffic, granted,
+			rejected, maxPresence, reserviceLocked};
+	enum class basicRole       : uint8_t {unavailable = 8, truck, motorcycle, roadsideSource, police, fire, ambulance,
+			DOT, transit, slowMoving, stopNgo, cyclist, pedestrian, nonMotorized, military};
+	enum class vehicleType     : uint8_t {unavailable, notApply, special, moto, car, carOther, bus, axleCnt2, axleCnt3, axleCnt4,
+			axleCnt4Trailer, axleCnt5Trailer, axleCnt6Trailer, axleCnt5MultiTrailer, axleCnt6MultiTrailer, axleCnt7MultiTrailer};
+	enum class engageStatus    : uint8_t {unavailable, off, on, engaged};
+	enum class transGear       : uint8_t {neutral, park, forward, reverse, unavailable = 7};
+	enum class mapLocType      : uint8_t {outside, insideIntersectionBox, onInbound, atIntersectionBox, onOutbound};
+	enum class laneLocType     : uint8_t {outside, approaching, inside, leaving};
+	enum class controlMode     : uint8_t {unavailable, flashing, preemption, runningFree, coordination};
+	enum class phaseCallType   : uint8_t {none, vehicle, ped, bike};
+	enum class phaseRecallType : uint8_t {none, minimum, maximum, ped, bike};
+	enum class softCallObj     : uint8_t {none, ped, vehicle, priority};
+	enum class softCallType    : uint8_t {none, call, extension, cancel};
 }
 
 #endif

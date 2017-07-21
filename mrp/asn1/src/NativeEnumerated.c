@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -21,7 +21,7 @@
 /*
  * NativeEnumerated basic type description.
  */
-static ber_tlv_tag_t asn_DEF_NativeEnumerated_tags[] = {
+static const ber_tlv_tag_t asn_DEF_NativeEnumerated_tags[] = {
 	(ASN_TAG_CLASS_UNIVERSAL | (10 << 2))
 };
 asn_TYPE_descriptor_t asn_DEF_NativeEnumerated = {
@@ -36,6 +36,8 @@ asn_TYPE_descriptor_t asn_DEF_NativeEnumerated = {
 	NativeEnumerated_encode_xer,
 	NativeEnumerated_decode_uper,
 	NativeEnumerated_encode_uper,
+	NativeEnumerated_decode_aper,
+	NativeEnumerated_encode_aper,
 	0, /* Use generic outmost tag fetcher */
 	asn_DEF_NativeEnumerated_tags,
 	sizeof(asn_DEF_NativeEnumerated_tags) / sizeof(asn_DEF_NativeEnumerated_tags[0]),
@@ -58,7 +60,7 @@ NativeEnumerated_encode_xer(asn_TYPE_descriptor_t *td, void *sptr,
         (void)ilevel;
         (void)flags;
 
-        if(!native) _ASN_ENCODE_FAILED;
+        if(!native) ASN__ENCODE_FAILED;
 
 	el = INTEGER_map_value2enum(specs, *native);
 	if(el) {
@@ -67,12 +69,12 @@ NativeEnumerated_encode_xer(asn_TYPE_descriptor_t *td, void *sptr,
 
 		er.encoded = snprintf(src, srcsize, "<%s/>", el->enum_name);
 		assert(er.encoded > 0 && (size_t)er.encoded < srcsize);
-		if(cb(src, er.encoded, app_key) < 0) _ASN_ENCODE_FAILED;
-		_ASN_ENCODED_OK(er);
+		if(cb(src, er.encoded, app_key) < 0) ASN__ENCODE_FAILED;
+		ASN__ENCODED_OK(er);
 	} else {
 		ASN_DEBUG("ASN.1 forbids dealing with "
 			"unknown value of ENUMERATED type");
-		_ASN_ENCODE_FAILED;
+		ASN__ENCODE_FAILED;
 	}
 }
 
@@ -90,39 +92,94 @@ NativeEnumerated_decode_uper(asn_codec_ctx_t *opt_codec_ctx,
 
 	if(constraints) ct = &constraints->value;
 	else if(td->per_constraints) ct = &td->per_constraints->value;
-	else _ASN_DECODE_FAILED;	/* Mandatory! */
-	if(!specs) _ASN_DECODE_FAILED;
+	else ASN__DECODE_FAILED;	/* Mandatory! */
+	if(!specs) ASN__DECODE_FAILED;
 
 	if(!native) {
 		native = (long *)(*sptr = CALLOC(1, sizeof(*native)));
-		if(!native) _ASN_DECODE_FAILED;
+		if(!native) ASN__DECODE_FAILED;
 	}
 
 	ASN_DEBUG("Decoding %s as NativeEnumerated", td->name);
 
 	if(ct->flags & APC_EXTENSIBLE) {
 		int inext = per_get_few_bits(pd, 1);
-		if(inext < 0) _ASN_DECODE_STARVED;
+		if(inext < 0) ASN__DECODE_STARVED;
 		if(inext) ct = 0;
 	}
 
 	if(ct && ct->range_bits >= 0) {
 		value = per_get_few_bits(pd, ct->range_bits);
-		if(value < 0) _ASN_DECODE_STARVED;
+		if(value < 0) ASN__DECODE_STARVED;
 		if(value >= (specs->extension
 			? specs->extension - 1 : specs->map_count))
-			_ASN_DECODE_FAILED;
+			ASN__DECODE_FAILED;
 	} else {
 		if(!specs->extension)
-			_ASN_DECODE_FAILED;
+			ASN__DECODE_FAILED;
 		/*
 		 * X.691, #10.6: normally small non-negative whole number;
 		 */
 		value = uper_get_nsnnwn(pd);
-		if(value < 0) _ASN_DECODE_STARVED;
+		if(value < 0) ASN__DECODE_STARVED;
 		value += specs->extension - 1;
 		if(value >= specs->map_count)
-			_ASN_DECODE_FAILED;
+			ASN__DECODE_FAILED;
+	}
+
+	*native = specs->value2enum[value].nat_value;
+	ASN_DEBUG("Decoded %s = %ld", td->name, *native);
+
+	return rval;
+}
+
+asn_dec_rval_t
+NativeEnumerated_decode_aper(asn_codec_ctx_t *opt_codec_ctx,
+	asn_TYPE_descriptor_t *td, asn_per_constraints_t *constraints,
+	void **sptr, asn_per_data_t *pd) {
+	asn_INTEGER_specifics_t *specs = (asn_INTEGER_specifics_t *)td->specifics;
+	asn_dec_rval_t rval = { RC_OK, 0 };
+	long *native = (long *)*sptr;
+	asn_per_constraint_t *ct;
+	long value;
+
+	(void)opt_codec_ctx;
+
+	if(constraints) ct = &constraints->value;
+	else if(td->per_constraints) ct = &td->per_constraints->value;
+	else ASN__DECODE_FAILED;	/* Mandatory! */
+	if(!specs) ASN__DECODE_FAILED;
+
+	if(!native) {
+		native = (long *)(*sptr = CALLOC(1, sizeof(*native)));
+		if(!native) ASN__DECODE_FAILED;
+	}
+
+	ASN_DEBUG("Decoding %s as NativeEnumerated", td->name);
+
+	if(ct->flags & APC_EXTENSIBLE) {
+		int inext = per_get_few_bits(pd, 1);
+		if(inext < 0) ASN__DECODE_STARVED;
+		if(inext) ct = 0;
+	}
+
+	if(ct && ct->range_bits >= 0) {
+		value = per_get_few_bits(pd, ct->range_bits);
+		if(value < 0) ASN__DECODE_STARVED;
+		if(value >= (specs->extension
+			? specs->extension - 1 : specs->map_count))
+			ASN__DECODE_FAILED;
+	} else {
+		if(!specs->extension)
+			ASN__DECODE_FAILED;
+		/*
+		 * X.691, #10.6: normally small non-negative whole number;
+		 */
+		value = uper_get_nsnnwn(pd);
+		if(value < 0) ASN__DECODE_STARVED;
+		value += specs->extension - 1;
+		if(value >= specs->map_count)
+			ASN__DECODE_FAILED;
 	}
 
 	*native = specs->value2enum[value].nat_value;
@@ -151,28 +208,28 @@ NativeEnumerated_encode_uper(asn_TYPE_descriptor_t *td,
 	asn_per_constraint_t *ct;
 	int inext = 0;
 	asn_INTEGER_enum_map_t key;
-	asn_INTEGER_enum_map_t *kf;
+	const asn_INTEGER_enum_map_t *kf;
 
-	if(!sptr) _ASN_ENCODE_FAILED;
-	if(!specs) _ASN_ENCODE_FAILED;
+	if(!sptr) ASN__ENCODE_FAILED;
+	if(!specs) ASN__ENCODE_FAILED;
 
 	if(constraints) ct = &constraints->value;
 	else if(td->per_constraints) ct = &td->per_constraints->value;
-	else _ASN_ENCODE_FAILED;	/* Mandatory! */
+	else ASN__ENCODE_FAILED;	/* Mandatory! */
 
 	ASN_DEBUG("Encoding %s as NativeEnumerated", td->name);
 
 	er.encoded = 0;
 
 	native = *(long *)sptr;
-	if(native < 0) _ASN_ENCODE_FAILED;
+	if(native < 0) ASN__ENCODE_FAILED;
 
 	key.nat_value = native;
 	kf = bsearch(&key, specs->value2enum, specs->map_count,
 		sizeof(key), NativeEnumerated__compar_value2enum);
 	if(!kf) {
 		ASN_DEBUG("No element corresponds to %ld", native);
-		_ASN_ENCODE_FAILED;
+		ASN__ENCODE_FAILED;
 	}
 	value = kf - specs->value2enum;
 
@@ -184,20 +241,20 @@ NativeEnumerated_encode_uper(asn_TYPE_descriptor_t *td,
 	}
 	if(ct->flags & APC_EXTENSIBLE) {
 		if(per_put_few_bits(po, inext, 1))
-			_ASN_ENCODE_FAILED;
+			ASN__ENCODE_FAILED;
 		if(inext) ct = 0;
 	} else if(inext) {
-		_ASN_ENCODE_FAILED;
+		ASN__ENCODE_FAILED;
 	}
 
 	if(ct && ct->range_bits >= 0) {
 		if(per_put_few_bits(po, value, ct->range_bits))
-			_ASN_ENCODE_FAILED;
-		_ASN_ENCODED_OK(er);
+			ASN__ENCODE_FAILED;
+		ASN__ENCODED_OK(er);
 	}
 
 	if(!specs->extension)
-		_ASN_ENCODE_FAILED;
+		ASN__ENCODE_FAILED;
 
 	/*
 	 * X.691, #10.6: normally small non-negative whole number;
@@ -206,8 +263,76 @@ NativeEnumerated_encode_uper(asn_TYPE_descriptor_t *td,
 		value, specs->extension, inext,
 		value - (inext ? (specs->extension - 1) : 0));
 	if(uper_put_nsnnwn(po, value - (inext ? (specs->extension - 1) : 0)))
-		_ASN_ENCODE_FAILED;
+		ASN__ENCODE_FAILED;
 
-	_ASN_ENCODED_OK(er);
+	ASN__ENCODED_OK(er);
 }
 
+asn_enc_rval_t
+NativeEnumerated_encode_aper(asn_TYPE_descriptor_t *td,
+        asn_per_constraints_t *constraints, void *sptr, asn_per_outp_t *po) {
+       asn_INTEGER_specifics_t *specs = (asn_INTEGER_specifics_t *)td->specifics;
+        asn_enc_rval_t er;
+        long native, value;
+        asn_per_constraint_t *ct;
+        int inext = 0;
+        asn_INTEGER_enum_map_t key;
+        asn_INTEGER_enum_map_t *kf;
+
+        if(!sptr) ASN__ENCODE_FAILED;
+        if(!specs) ASN__ENCODE_FAILED;
+
+        if(constraints) ct = &constraints->value;
+        else if(td->per_constraints) ct = &td->per_constraints->value;
+        else ASN__ENCODE_FAILED;        /* Mandatory! */
+
+        ASN_DEBUG("Encoding %s as NativeEnumerated", td->name);
+
+        er.encoded = 0;
+
+        native = *(long *)sptr;
+        if(native < 0) ASN__ENCODE_FAILED;
+
+        key.nat_value = native;
+        kf = bsearch(&key, specs->value2enum, specs->map_count,
+                sizeof(key), NativeEnumerated__compar_value2enum);
+        if(!kf) {
+                ASN_DEBUG("No element corresponds to %ld", native);
+                ASN__ENCODE_FAILED;
+        }
+        value = kf - specs->value2enum;
+
+        if(ct->range_bits >= 0) {
+                int cmpWith = specs->extension
+                                ? specs->extension - 1 : specs->map_count;
+                if(value >= cmpWith)
+                        inext = 1;
+        }
+        if(ct->flags & APC_EXTENSIBLE) {
+                if(per_put_few_bits(po, inext, 1))
+                        ASN__ENCODE_FAILED;
+                if(inext) ct = 0;
+        } else if(inext) {
+                ASN__ENCODE_FAILED;
+        }
+
+        if(ct && ct->range_bits >= 0) {
+                if(per_put_few_bits(po, value, ct->range_bits))
+                        ASN__ENCODE_FAILED;
+                ASN__ENCODED_OK(er);
+        }
+
+        if(!specs->extension)
+                ASN__ENCODE_FAILED;
+
+        /*
+         * X.691, #10.6: normally small non-negative whole number;
+         */
+        ASN_DEBUG("value = %ld, ext = %d, inext = %d, res = %ld",
+                value, specs->extension, inext,
+                value - (inext ? (specs->extension - 1) : 0));
+        if(uper_put_nsnnwn(po, value - (inext ? (specs->extension - 1) : 0)))
+                ASN__ENCODE_FAILED;
+
+        ASN__ENCODED_OK(er);
+}

@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -23,7 +23,7 @@ static asn_app_consume_bytes_f _print2fp;
  * Return the outmost tag of the type.
  */
 ber_tlv_tag_t
-asn_TYPE_outmost_tag(asn_TYPE_descriptor_t *type_descriptor,
+asn_TYPE_outmost_tag(const asn_TYPE_descriptor_t *type_descriptor,
 		const void *struct_ptr, int tag_mode, ber_tlv_tag_t tag) {
 
 	if(tag_mode)

@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -12,22 +12,30 @@
 /*
  * Miscellaneous system-dependent types.
  */
-#ifndef	_ASN_SYSTEM_H_
-#define	_ASN_SYSTEM_H_
+#ifndef	ASN_SYSTEM_H
+#define	ASN_SYSTEM_H
 
 #ifdef	HAVE_CONFIG_H
 #include "config.h"
+#endif
+
+#ifndef _BSD_SOURCE
+#define _BSD_SOURCE /* for snprintf() on some linux systems  */
 #endif
 
 #include <stdio.h>	/* For snprintf(3) */
 #include <stdlib.h>	/* For *alloc(3) */
 #include <string.h>	/* For memcpy(3) */
 #include <sys/types.h>	/* For size_t */
-#include <limits.h>	/* For LONG_MAX */
+#include <limits.h>	/* For LLONG_MAX and ULLONG_MAX */
 #include <stdarg.h>	/* For va_start */
 #include <stddef.h>	/* for offsetof and ptrdiff_t */
 
-#ifdef	WIN32
+#ifdef	HAVE_ALLOCA_H
+#include <alloca.h>	/* For alloca(3) */
+#endif
+
+#ifdef	_WIN32
 
 #include <malloc.h>
 #define	 snprintf	_snprintf
@@ -35,9 +43,9 @@
 
 /* To avoid linking with ws2_32.lib, here's the definition of ntohl() */
 #define sys_ntohl(l)	((((l) << 24)  & 0xff000000)	\
-			| (((l) << 16) & 0xff0000)	\
-			| (((l) << 8)  & 0xff00)	\
-			| ((l) & 0xff))
+			| (((l) << 8) & 0xff0000)	\
+			| (((l) >> 8)  & 0xff00)	\
+			| ((l >> 24) & 0xff))
 
 #ifdef _MSC_VER			/* MSVS.Net */
 #ifndef __cplusplus
@@ -63,7 +71,7 @@ typedef	unsigned int	uint32_t;
 #include <stdint.h>
 #endif	/* _MSC_VER */
 
-#else	/* !WIN32 */
+#else	/* !_WIN32 */
 
 #if defined(__vxworks)
 #include <types/vxTypes.h>
@@ -96,7 +104,7 @@ typedef	unsigned int	uint32_t;
 
 #endif	/* defined(__vxworks) */
 
-#endif	/* WIN32 */
+#endif	/* _WIN32 */
 
 #if	__GNUC__ >= 3
 #ifndef	GCC_PRINTFLIKE
@@ -132,4 +140,4 @@ typedef	unsigned int	uint32_t;
 #endif /* __GNUC__ */
 #endif	/* MIN */
 
-#endif	/* _ASN_SYSTEM_H_ */
+#endif	/* ASN_SYSTEM_H */

@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -30,6 +30,8 @@ extern asn_TYPE_descriptor_t asn_DEF_NativeEnumerated;
 xer_type_encoder_f NativeEnumerated_encode_xer;
 per_type_decoder_f NativeEnumerated_decode_uper;
 per_type_encoder_f NativeEnumerated_encode_uper;
+per_type_decoder_f NativeEnumerated_decode_aper;
+per_type_encoder_f NativeEnumerated_encode_aper;
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -29,18 +29,18 @@ xer_encode(asn_TYPE_descriptor_t *td, void *sptr,
 	mname = td->xml_tag;
 	mlen = strlen(mname);
 
-	_ASN_CALLBACK3("<", 1, mname, mlen, ">", 1);
+	ASN__CALLBACK3("<", 1, mname, mlen, ">", 1);
 
 	tmper = td->xer_encoder(td, sptr, 1, xer_flags, cb, app_key);
 	if(tmper.encoded == -1) return tmper;
 
-	_ASN_CALLBACK3("</", 2, mname, mlen, ">\n", xcan);
+	ASN__CALLBACK3("</", 2, mname, mlen, ">\n", xcan);
 
 	er.encoded = 4 + xcan + (2 * mlen) + tmper.encoded;
 
-	_ASN_ENCODED_OK(er);
+	ASN__ENCODED_OK(er);
 cb_failed:
-	_ASN_ENCODE_FAILED;
+	ASN__ENCODE_FAILED;
 }
 
 /*

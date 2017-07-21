@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -15,7 +15,7 @@
 /*
  * BOOLEAN basic type description.
  */
-static ber_tlv_tag_t asn_DEF_BOOLEAN_tags[] = {
+static const ber_tlv_tag_t asn_DEF_BOOLEAN_tags[] = {
 	(ASN_TAG_CLASS_UNIVERSAL | (1 << 2))
 };
 asn_TYPE_descriptor_t asn_DEF_BOOLEAN = {
@@ -30,6 +30,8 @@ asn_TYPE_descriptor_t asn_DEF_BOOLEAN = {
 	BOOLEAN_encode_xer,
 	BOOLEAN_decode_uper,	/* Unaligned PER decoder */
 	BOOLEAN_encode_uper,	/* Unaligned PER encoder */
+	BOOLEAN_decode_aper,	/* Aligned PER decoder */
+	BOOLEAN_encode_aper,	/* Aligned PER encoder */
 	0, /* Use generic outmost tag fetcher */
 	asn_DEF_BOOLEAN_tags,
 	sizeof(asn_DEF_BOOLEAN_tags) / sizeof(asn_DEF_BOOLEAN_tags[0]),
@@ -135,7 +137,7 @@ BOOLEAN_encode_der(asn_TYPE_descriptor_t *td, void *sptr,
 
 	erval.encoded += 1;
 
-	_ASN_ENCODED_OK(erval);
+	ASN__ENCODED_OK(erval);
 }
 
 
@@ -167,10 +169,7 @@ BOOLEAN__xer_body_decode(asn_TYPE_descriptor_t *td, void *sptr, const void *chun
 		}
 		return XPBD_BODY_CONSUMED;
 	} else {
-		if(xer_is_whitespace(chunk_buf, chunk_size))
-			return XPBD_NOT_BODY_IGNORE;
-		else
-			return XPBD_BROKEN_ENCODING;
+		return XPBD_BROKEN_ENCODING;
 	}
 }
 
@@ -195,19 +194,19 @@ BOOLEAN_encode_xer(asn_TYPE_descriptor_t *td, void *sptr,
 	(void)ilevel;
 	(void)flags;
 
-	if(!st) _ASN_ENCODE_FAILED;
+	if(!st) ASN__ENCODE_FAILED;
 
 	if(*st) {
-		_ASN_CALLBACK("<true/>", 7);
+		ASN__CALLBACK("<true/>", 7);
 		er.encoded = 7;
 	} else {
-		_ASN_CALLBACK("<false/>", 8);
+		ASN__CALLBACK("<false/>", 8);
 		er.encoded = 8;
 	}
 
-	_ASN_ENCODED_OK(er);
+	ASN__ENCODED_OK(er);
 cb_failed:
-	_ASN_ENCODE_FAILED;
+	ASN__ENCODE_FAILED;
 }
 
 int
@@ -254,7 +253,7 @@ BOOLEAN_decode_uper(asn_codec_ctx_t *opt_codec_ctx, asn_TYPE_descriptor_t *td,
 
 	if(!st) {
 		st = (BOOLEAN_t *)(*sptr = MALLOC(sizeof(*st)));
-		if(!st) _ASN_DECODE_FAILED;
+		if(!st) ASN__DECODE_FAILED;
 	}
 
 	/*
@@ -263,7 +262,7 @@ BOOLEAN_decode_uper(asn_codec_ctx_t *opt_codec_ctx, asn_TYPE_descriptor_t *td,
 	switch(per_get_few_bits(pd, 1)) {
 	case 1: *st = 1; break;
 	case 0: *st = 0; break;
-	case -1: default: _ASN_DECODE_STARVED;
+	case -1: default: ASN__DECODE_STARVED;
 	}
 
 	ASN_DEBUG("%s decoded as %s", td->name, *st ? "TRUE" : "FALSE");
@@ -273,18 +272,63 @@ BOOLEAN_decode_uper(asn_codec_ctx_t *opt_codec_ctx, asn_TYPE_descriptor_t *td,
 	return rv;
 }
 
+asn_dec_rval_t
+BOOLEAN_decode_aper(asn_codec_ctx_t *opt_codec_ctx, asn_TYPE_descriptor_t *td,
+	asn_per_constraints_t *constraints, void **sptr, asn_per_data_t *pd) {
+	asn_dec_rval_t rv;
+	BOOLEAN_t *st = (BOOLEAN_t *)*sptr;
+
+	(void)opt_codec_ctx;
+	(void)constraints;
+
+	if(!st) {
+		st = (BOOLEAN_t *)(*sptr = MALLOC(sizeof(*st)));
+		if(!st) ASN__DECODE_FAILED;
+	}
+
+	/*
+	 * Extract a single bit
+	 */
+	switch(per_get_few_bits(pd, 1)) {
+	case 1: *st = 1; break;
+	case 0: *st = 0; break;
+	case -1: default: ASN__DECODE_STARVED;
+	}
+
+	ASN_DEBUG("%s decoded as %s", td->name, *st ? "TRUE" : "FALSE");
+
+	rv.code = RC_OK;
+	rv.consumed = 1;
+	return rv;
+}
 
 asn_enc_rval_t
 BOOLEAN_encode_uper(asn_TYPE_descriptor_t *td,
+	asn_per_constraints_t *constraints, void *sptr, asn_per_outp_t *po) {
+	const BOOLEAN_t *st = (const BOOLEAN_t *)sptr;
+	asn_enc_rval_t er = { 0, 0, 0 };
+
+	(void)constraints;
+
+	if(!st) ASN__ENCODE_FAILED;
+
+	if(per_put_few_bits(po, *st ? 1 : 0, 1))
+		ASN__ENCODE_FAILED;
+
+	ASN__ENCODED_OK(er);
+}
+
+asn_enc_rval_t
+BOOLEAN_encode_aper(asn_TYPE_descriptor_t *td,
 	asn_per_constraints_t *constraints, void *sptr, asn_per_outp_t *po) {
 	const BOOLEAN_t *st = (const BOOLEAN_t *)sptr;
 	asn_enc_rval_t er;
 
 	(void)constraints;
 
-	if(!st) _ASN_ENCODE_FAILED;
+	if(!st) ASN__ENCODE_FAILED;
 
 	per_put_few_bits(po, *st ? 1 : 0, 1);
 
-	_ASN_ENCODED_OK(er);
+	ASN__ENCODED_OK(er);
 }

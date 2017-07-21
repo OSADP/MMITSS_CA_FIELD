@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -35,6 +35,8 @@ xer_type_decoder_f NativeInteger_decode_xer;
 xer_type_encoder_f NativeInteger_encode_xer;
 per_type_decoder_f NativeInteger_decode_uper;
 per_type_encoder_f NativeInteger_encode_uper;
+per_type_decoder_f NativeInteger_decode_aper;
+per_type_encoder_f NativeInteger_encode_aper;
 
 #ifdef __cplusplus
 }

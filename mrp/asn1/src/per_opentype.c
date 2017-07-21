@@ -1,6 +1,6 @@
 //********************************************************************************************************
 //
-// © 2016 Regents of the University of California on behalf of the University of California at Berkeley
+// Â© 2016 Regents of the University of California on behalf of the University of California at Berkeley
 //       with rights granted for USDOT OSADP distribution with the ECL-2.0 open source license.
 //
 //*********************************************************************************************************
@@ -24,8 +24,6 @@ static int uper_ugot_refill(asn_per_data_t *pd);
 static int per_skip_bits(asn_per_data_t *pd, int skip_nbits);
 static asn_dec_rval_t uper_sot_suck(asn_codec_ctx_t *, asn_TYPE_descriptor_t *td, asn_per_constraints_t *constraints, void **sptr, asn_per_data_t *pd);
 
-int asn_debug_indent;
-
 /*
  * Encode an "open type field".
  * #10.1, #10.2
@@ -44,6 +42,8 @@ uper_open_type_put(asn_TYPE_descriptor_t *td, asn_per_constraints_t *constraints
 
 	for(bptr = buf, toGo = size; toGo;) {
 		ssize_t maySave = uper_put_length(po, toGo);
+		ASN_DEBUG("Prepending length %d to %s and allowing to save %d",
+			(int)size, td->name, (int)maySave);
 		if(maySave < 0) break;
 		if(per_put_many_bits(po, bptr, maySave * 8)) break;
 		bptr = (char *)bptr + maySave;
@@ -53,8 +53,37 @@ uper_open_type_put(asn_TYPE_descriptor_t *td, asn_per_constraints_t *constraints
 	FREEMEM(buf);
 	if(toGo) return -1;
 
-	ASN_DEBUG("Open type put %s of length %d + overhead (1byte?)",
-		td->name, size);
+	ASN_DEBUG("Open type put %s of length %ld + overhead (1byte?)",
+		td->name, (long)size);
+
+	return 0;
+}
+
+int
+aper_open_type_put(asn_TYPE_descriptor_t *td, asn_per_constraints_t *constraints, void *sptr, asn_per_outp_t *po) {
+	void *buf;
+	void *bptr;
+	ssize_t size;
+	size_t toGo;
+
+	ASN_DEBUG("Open type put %s ...", td->name);
+
+	size = aper_encode_to_new_buffer(td, constraints, sptr, &buf);
+	if(size <= 0) return -1;
+
+	for(bptr = buf, toGo = size; toGo;) {
+		ssize_t maySave = aper_put_length(po, -1, toGo);
+		if(maySave < 0) break;
+		if(per_put_many_bits(po, bptr, maySave * 8)) break;
+		bptr = (char *)bptr + maySave;
+		toGo -= maySave;
+	}
+
+	FREEMEM(buf);
+	if(toGo) return -1;
+
+	ASN_DEBUG("Open type put %s of length %lld + overhead (1byte?)",
+			  td->name, (long long)size);
 
 	return 0;
 }
@@ -71,7 +100,7 @@ uper_open_type_get_simple(asn_codec_ctx_t *ctx, asn_TYPE_descriptor_t *td,
 	asn_per_data_t spd;
 	size_t padding;
 
-	_ASN_STACK_OVERFLOW_CHECK(ctx);
+	ASN__STACK_OVERFLOW_CHECK(ctx);
 
 	ASN_DEBUG("Getting open type %s...", td->name);
 
@@ -79,7 +108,7 @@ uper_open_type_get_simple(asn_codec_ctx_t *ctx, asn_TYPE_descriptor_t *td,
 		chunk_bytes = uper_get_length(pd, -1, &repeat);
 		if(chunk_bytes < 0) {
 			FREEMEM(buf);
-			_ASN_DECODE_STARVED;
+			ASN__DECODE_STARVED;
 		}
 		if(bufLen + chunk_bytes > bufSize) {
 			void *ptr;
@@ -87,43 +116,46 @@ uper_open_type_get_simple(asn_codec_ctx_t *ctx, asn_TYPE_descriptor_t *td,
 			ptr = REALLOC(buf, bufSize);
 			if(!ptr) {
 				FREEMEM(buf);
-				_ASN_DECODE_FAILED;
+				ASN__DECODE_FAILED;
 			}
 			buf = ptr;
 		}
 		if(per_get_many_bits(pd, buf + bufLen, 0, chunk_bytes << 3)) {
 			FREEMEM(buf);
-			_ASN_DECODE_STARVED;
+			ASN__DECODE_STARVED;
 		}
 		bufLen += chunk_bytes;
 	} while(repeat);
 
-	ASN_DEBUG("Getting open type %s encoded in %d bytes", td->name,
-		bufLen);
+	ASN_DEBUG("Getting open type %s encoded in %ld bytes", td->name,
+		(long)bufLen);
 
 	memset(&spd, 0, sizeof(spd));
 	spd.buffer = buf;
 	spd.nbits = bufLen << 3;
 
-	asn_debug_indent += 4;
+	ASN_DEBUG_INDENT_ADD(+4);
 	rv = td->uper_decoder(ctx, td, constraints, sptr, &spd);
-	asn_debug_indent -= 4;
+	ASN_DEBUG_INDENT_ADD(-4);
 
 	if(rv.code == RC_OK) {
 		/* Check padding validity */
 		padding = spd.nbits - spd.nboff;
-		if(padding < 8 && per_get_few_bits(&spd, padding) == 0) {
+                if ((padding < 8 ||
+		/* X.691#10.1.3 */
+		(spd.nboff == 0 && spd.nbits == 8 && spd.buffer == buf)) &&
+                    per_get_few_bits(&spd, padding) == 0) {
 			/* Everything is cool */
 			FREEMEM(buf);
 			return rv;
 		}
 		FREEMEM(buf);
 		if(padding >= 8) {
-			ASN_DEBUG("Too large padding %d in open type", padding);
-			_ASN_DECODE_FAILED;
+			ASN_DEBUG("Too large padding %d in open type", (int)padding);
+			ASN__DECODE_FAILED;
 		} else {
 			ASN_DEBUG("Non-zero padding");
-			_ASN_DECODE_FAILED;
+			ASN__DECODE_FAILED;
 		}
 	} else {
 		FREEMEM(buf);
@@ -141,7 +173,7 @@ uper_open_type_get_complex(asn_codec_ctx_t *ctx, asn_TYPE_descriptor_t *td,
 	asn_dec_rval_t rv;
 	ssize_t padding;
 
-	_ASN_STACK_OVERFLOW_CHECK(ctx);
+	ASN__STACK_OVERFLOW_CHECK(ctx);
 
 	ASN_DEBUG("Getting open type %s from %s", td->name,
 		per_data_string(pd));
@@ -154,9 +186,9 @@ uper_open_type_get_complex(asn_codec_ctx_t *ctx, asn_TYPE_descriptor_t *td,
 	pd->nbits = pd->nboff;	/* 0 good bits at this point, will refill */
 	pd->moved = 0;	/* This now counts the open type size in bits */
 
-	asn_debug_indent += 4;
+	ASN_DEBUG_INDENT_ADD(+4);
 	rv = td->uper_decoder(ctx, td, constraints, sptr, pd);
-	asn_debug_indent -= 4;
+	ASN_DEBUG_INDENT_ADD(-4);
 
 #define	UPDRESTOREPD	do {						\
 	/* buffer and nboff are valid, preserve them. */		\
@@ -171,36 +203,35 @@ uper_open_type_get_complex(asn_codec_ctx_t *ctx, asn_TYPE_descriptor_t *td,
 		return rv;
 	}
 
-	ASN_DEBUG("OpenType %s pd%s old%s unclaimed=%d, repeat=%d"
-		, td->name,
+	ASN_DEBUG("OpenType %s pd%s old%s unclaimed=%d, repeat=%d", td->name,
 		per_data_string(pd),
 		per_data_string(&arg.oldpd),
-		arg.unclaimed, arg.repeat);
+		(int)arg.unclaimed, (int)arg.repeat);
 
 	padding = pd->moved % 8;
 	if(padding) {
 		int32_t pvalue;
 		if(padding > 7) {
 			ASN_DEBUG("Too large padding %d in open type",
-				padding);
+				(int)padding);
 			rv.code = RC_FAIL;
 			UPDRESTOREPD;
 			return rv;
 		}
 		padding = 8 - padding;
-		ASN_DEBUG("Getting padding of %d bits", padding);
+		ASN_DEBUG("Getting padding of %d bits", (int)padding);
 		pvalue = per_get_few_bits(pd, padding);
 		switch(pvalue) {
 		case -1:
 			ASN_DEBUG("Padding skip failed");
 			UPDRESTOREPD;
-			_ASN_DECODE_STARVED;
+			ASN__DECODE_STARVED;
 		case 0: break;
 		default:
 			ASN_DEBUG("Non-blank padding (%d bits 0x%02x)",
-				padding, (int)pvalue);
+				(int)padding, (int)pvalue);
 			UPDRESTOREPD;
-			_ASN_DECODE_FAILED;
+			ASN__DECODE_FAILED;
 		}
 	}
 	if(pd->nboff != pd->nbits) {
@@ -208,7 +239,7 @@ uper_open_type_get_complex(asn_codec_ctx_t *ctx, asn_TYPE_descriptor_t *td,
 			per_data_string(pd), per_data_string(&arg.oldpd));
 		if(1) {
 			UPDRESTOREPD;
-			_ASN_DECODE_FAILED;
+			ASN__DECODE_FAILED;
 		} else {
 			arg.unclaimed += pd->nbits - pd->nboff;
 		}
@@ -218,19 +249,19 @@ uper_open_type_get_complex(asn_codec_ctx_t *ctx, asn_TYPE_descriptor_t *td,
 	UPDRESTOREPD;
 
 	/* Skip data not consumed by the decoder */
-	if(arg.unclaimed) ASN_DEBUG("Getting unclaimed %d", arg.unclaimed);
 	if(arg.unclaimed) {
+		ASN_DEBUG("Getting unclaimed %d", (int)arg.unclaimed);
 		switch(per_skip_bits(pd, arg.unclaimed)) {
 		case -1:
-			ASN_DEBUG("Claim of %d failed", arg.unclaimed);
-			_ASN_DECODE_STARVED;
+			ASN_DEBUG("Claim of %d failed", (int)arg.unclaimed);
+			ASN__DECODE_STARVED;
 		case 0:
-			ASN_DEBUG("Got claim of %d", arg.unclaimed);
+			ASN_DEBUG("Got claim of %d", (int)arg.unclaimed);
 			break;
 		default:
 			/* Padding must be blank */
 			ASN_DEBUG("Non-blank unconsumed padding");
-			_ASN_DECODE_FAILED;
+			ASN__DECODE_FAILED;
 		}
 		arg.unclaimed = 0;
 	}
@@ -249,9 +280,7 @@ asn_dec_rval_t
 uper_open_type_get(asn_codec_ctx_t *ctx, asn_TYPE_descriptor_t *td,
 	asn_per_constraints_t *constraints, void **sptr, asn_per_data_t *pd) {
 
-	return uper_open_type_get_simple(ctx, td, constraints,
-		sptr, pd);
-
+	return uper_open_type_get_simple(ctx, td, constraints, sptr, pd);
 }
 
 int
@@ -283,7 +312,7 @@ uper_sot_suck(asn_codec_ctx_t *ctx, asn_TYPE_descriptor_t *td,
 	(void)constraints;
 	(void)sptr;
 
-	while(per_get_few_bits(pd, 24) >= 0);
+	while(per_get_few_bits(pd, 1) >= 0);
 
 	rv.code = RC_OK;
 	rv.consumed = pd->moved;
@@ -299,8 +328,8 @@ uper_ugot_refill(asn_per_data_t *pd) {
 
 	asn_per_data_t *oldpd = &arg->oldpd;
 
-	ASN_DEBUG("REFILLING pd->moved=%d, oldpd->moved=%d",
-		pd->moved, oldpd->moved);
+	ASN_DEBUG("REFILLING pd->moved=%ld, oldpd->moved=%ld",
+		(long)pd->moved, (long)oldpd->moved);
 
 	/* Advance our position to where pd is */
 	oldpd->buffer = pd->buffer;
@@ -320,7 +349,8 @@ uper_ugot_refill(asn_per_data_t *pd) {
 		pd->buffer = oldpd->buffer;
 		pd->nboff = oldpd->nboff - 1;
 		pd->nbits = oldpd->nbits;
-		ASN_DEBUG("UNCLAIMED <- return from (pd->moved=%d)", pd->moved);
+		ASN_DEBUG("UNCLAIMED <- return from (pd->moved=%ld)",
+			(long)pd->moved);
 		return 0;
 	}
 
@@ -330,8 +360,8 @@ uper_ugot_refill(asn_per_data_t *pd) {
 	}
 
 	next_chunk_bytes = uper_get_length(oldpd, -1, &arg->repeat);
-	ASN_DEBUG("Open type LENGTH %d bytes at off %d, repeat %d",
-		next_chunk_bytes, oldpd->moved, arg->repeat);
+	ASN_DEBUG("Open type LENGTH %ld bytes at off %ld, repeat %ld",
+		(long)next_chunk_bytes, (long)oldpd->moved, (long)arg->repeat);
 	if(next_chunk_bytes < 0) return -1;
 	if(next_chunk_bytes == 0) {
 		pd->refill = 0;	/* No more refills, naturally */
@@ -342,14 +372,16 @@ uper_ugot_refill(asn_per_data_t *pd) {
 	if(avail >= next_chunk_bits) {
 		pd->nbits = oldpd->nboff + next_chunk_bits;
 		arg->unclaimed = 0;
-		ASN_DEBUG("!+Parent frame %d bits, alloting %d [%d..%d] (%d)",
-			next_chunk_bits, oldpd->moved,
-			oldpd->nboff, oldpd->nbits,
-			oldpd->nbits - oldpd->nboff);
+		ASN_DEBUG("!+Parent frame %ld bits, alloting %ld [%ld..%ld] (%ld)",
+			(long)next_chunk_bits, (long)oldpd->moved,
+			(long)oldpd->nboff, (long)oldpd->nbits,
+			(long)(oldpd->nbits - oldpd->nboff));
 	} else {
 		pd->nbits = oldpd->nbits;
 		arg->unclaimed = next_chunk_bits - avail;
-		ASN_DEBUG("!-Parent frame %d, require %d, will claim %d", avail, next_chunk_bits, arg->unclaimed);
+		ASN_DEBUG("!-Parent frame %ld, require %ld, will claim %ld",
+			(long)avail, (long)next_chunk_bits,
+			(long)arg->unclaimed);
 	}
 	pd->buffer = oldpd->buffer;
 	pd->nboff = oldpd->nboff;
@@ -363,7 +395,9 @@ per_skip_bits(asn_per_data_t *pd, int skip_nbits) {
 	int hasNonZeroBits = 0;
 	while(skip_nbits > 0) {
 		int skip;
-		if(skip_nbits < skip)
+
+		/* per_get_few_bits() is more efficient when nbits <= 24 */
+		if(skip_nbits < 24)
 			skip = skip_nbits;
 		else
 			skip = 24;
