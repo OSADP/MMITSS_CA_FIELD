@@ -14,8 +14,7 @@ The MMITSS applications bundles includes the Arizona version of MMITSS (MMITSS-A
 The MMITSS-AZ aims to provide adaptive traffic and signal priority control using connected vehicle data. The MMITSS-CA aims to improve 
 the existing actuated-coordinated traffic signal control system, with performance enhancements and signal coordination and priority
 control techniques enabled by the connected vehicle data. Traffic control agencies are provided with options for selective use of 
-MMITSS-AZ or MMITSS-CA based on their needs. This package includes software set for the MMITSS-CA. The MMITSS-AZ software set can be
-download from [OSADP](https://www.itsforge.net/index.php/community/explore-applications/for-search-results#/30/63).
+MMITSS-AZ or MMITSS-CA based on their needs. This package includes software set for the MMITSS-CA. 
 
 The MMITSS-CA software set includes software to be hosted at three (3) physical devices:
 -	An Ubuntu Linux-based MMITSS Roadside Processor (MRP) that generates SAE J2735 MAP, SPaT (Signal Phase and Timing)
@@ -93,3 +92,15 @@ and OBUS components on Savari MobiWAVE devices are described in README under the
 [Connected Vehicle Pooled Fund Study website](http://www.cts.virginia.edu/cvpfs_research/)
 - [MMITSS Concept of Operations](http://www.cts.virginia.edu/wp-content/uploads/2014/05/Task2.3._CONOPS_6_Final_Revised.pdf)
 - [MMITSS-CA Detailed System and Software Design](http://www.cts.virginia.edu/wp-content/uploads/2014/04/32-MMITSS-Phase-2-Detailed-Design-CA-final.pdf)
+
+
+## Code.Gov Info
+Agency: DOT
+
+Short Description:The MMITSS-CA software includes three (3) arterial traffic signal applications: Intelligent Signal Control (I-SIG), Signal Priority (SP), Mobile Accessible Pedestrian Signal System (PED-SIG)
+
+Status: Beta
+
+Tags: transportation,multi-modal, its
+
+Labor Hours: 0
